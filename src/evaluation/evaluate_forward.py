@@ -75,8 +75,8 @@ def evaluate_all(checkpoint_name: str = "final"):
 
     test_sets = {
         "random": "test_random",
-        "diwali_2022": "test_diwali",
-        "winter_2022": "test_winter",
+        "diwali_2019": "test_diwali",
+        "winter_2019": "test_winter",
         "full_test": "test",
     }
 
