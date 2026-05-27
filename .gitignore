@@ -1,0 +1,54 @@
+# Data (too large for git)
+data/raw/
+data/processed/
+data/splits/
+*.parquet
+*.nc
+*.npy
+*.csv
+
+# Model checkpoints
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Wandb
+wandb/
+
+# Environment
+.env
+
+# Node (dashboard)
+dashboard/node_modules/
+dashboard/dist/
+dashboard/build/
+PLAYBOOK.md
+HANDOFF.md
+claude.md
