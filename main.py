@@ -1,6 +1,6 @@
 import sys
 import argparse
-
+from typing import Optional
 
 def cmd_download():
     from src.data.download_cpcb import main as download_cpcb
@@ -16,7 +16,7 @@ def cmd_preprocess():
     run_pipeline()
 
 
-def cmd_train(inverse: bool = False):
+def cmd_train(inverse: bool = False, resume: Optional[str] = None):
     import torch
     import pandas as pd
     from src.config import SPLITS_DIR, DEVICE
@@ -30,11 +30,8 @@ def cmd_train(inverse: bool = False):
 
     input_cols = ["x_norm", "y_norm", "t_norm",
                   "u_wind_norm", "v_wind_norm",
-                  "temp_norm", "blh_norm",
-                  "hour_sin", "hour_cos",
-                  "doy_sin", "doy_cos",
-                  "is_holiday"]
-    target_col = "pm25_norm"
+                  "temp_norm", "blh_norm"]
+    target_cols = ["pm25_norm", "no2_norm", "o3_norm", "so2_norm"]
 
     available = [c for c in input_cols if c in train_df.columns]
     missing_era5 = [c for c in ["u_wind_norm", "v_wind_norm", "temp_norm", "blh_norm"] if c not in train_df.columns]
@@ -54,27 +51,38 @@ def cmd_train(inverse: bool = False):
         print(f"[MAIN] Note: {missing_era5} are zero-filled (ERA5 absent)")
 
     def df_to_tensors(df, include_ic=False):
+        import pandas as pd
         inputs = torch.tensor(df[available].values, dtype=torch.float32)
-        targets = torch.tensor(df[target_col].values, dtype=torch.float32).unsqueeze(1)
-        mask = torch.tensor(df[target_col].notna().values, dtype=torch.float32).unsqueeze(1)
-
+        targets = torch.tensor(df[target_cols].values, dtype=torch.float32)  # [N, 4]
+        mask = torch.tensor(df[target_cols].notna().values, dtype=torch.float32)  # [N, 4]
 
         targets = torch.nan_to_num(targets, nan=0.0)
-        result = {"inputs": inputs, "targets": targets, "mask": mask}
+
+        event_w = pd.Series(1.0, index=df.index)
+        if "is_holiday" in df.columns:
+            event_w.loc[df["is_holiday"].astype(bool)] *= 3.0
+        if "timestamp" in df.columns:
+            event_w.loc[df["timestamp"].dt.month.isin([12, 1])] *= 2.0
+        if "pm25" in df.columns:
+            event_w.loc[df["pm25"] > 200] *= 2.0
+        event_weight = torch.tensor(event_w.values, dtype=torch.float32).unsqueeze(1)
+
+        result = {"inputs": inputs, "targets": targets, "mask": mask, "event_weight": event_weight}
 
         if include_ic:
 
 
             ic_rows = (
-                df.sort_values("t_norm")
+                df.dropna(subset=target_cols)
+                  .sort_values("t_norm")
                   .groupby("station", observed=True)
                   .first()
                   .reset_index()
             )
-            ic_rows = ic_rows.dropna(subset=[target_col])
             if len(ic_rows) > 0:
                 ic_inputs = torch.tensor(ic_rows[available].values, dtype=torch.float32)
-                ic_targets = torch.tensor(ic_rows[target_col].values, dtype=torch.float32).unsqueeze(1)
+                ic_targets = torch.tensor(ic_rows[target_cols].values, dtype=torch.float32)  # [M, 4]
+                ic_targets = torch.nan_to_num(ic_targets, nan=0.0)
                 result["ic_inputs"] = ic_inputs
                 result["ic_targets"] = ic_targets
                 print(f"[MAIN] IC points: {len(ic_rows)} (one per station at t=0)")
@@ -93,7 +101,7 @@ def cmd_train(inverse: bool = False):
         inverse_mode=inverse,
         use_wandb=True,
     )
-    trainer.train()
+    trainer.train(resume_from=resume)
 
 
 def cmd_evaluate():
@@ -111,6 +119,11 @@ def main():
         choices=["download", "preprocess", "train", "train-inverse", "evaluate", "all"],
         help="Pipeline stage to run",
     )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="Path to checkpoint to resume training from (e.g. checkpoints/aeras_v3_16dim_tuned_epoch_10000.pt)",
+    )
     args = parser.parse_args()
 
     if args.command == "download":
@@ -118,9 +131,9 @@ def main():
     elif args.command == "preprocess":
         cmd_preprocess()
     elif args.command == "train":
-        cmd_train(inverse=False)
+        cmd_train(inverse=False, resume=args.resume)
     elif args.command == "train-inverse":
-        cmd_train(inverse=True)
+        cmd_train(inverse=True, resume=args.resume)
     elif args.command == "evaluate":
         cmd_evaluate()
     elif args.command == "all":

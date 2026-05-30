@@ -168,6 +168,7 @@ class AerasTrainer:
         data_inputs = self.train_data["inputs"][data_idx]
         data_targets = self.train_data["targets"][data_idx]
         data_mask = self.train_data["mask"][data_idx] if "mask" in self.train_data else None
+        data_weight = self.train_data["event_weight"][data_idx] if "event_weight" in self.train_data else None
 
 
         colloc_inputs = self._sample_collocation_batch(BATCH_SIZE)
@@ -182,7 +183,7 @@ class AerasTrainer:
 
         with autocast(amp_device, enabled=self.use_amp):
             C_pred = self.model(data_inputs)
-            L_data = self.loss_fn.data_loss(C_pred, data_targets, data_mask)
+            L_data = self.loss_fn.data_loss(C_pred, data_targets, data_mask, weight=data_weight)
 
             if "ic_inputs" in self.train_data:
                 C_t0 = self.model(self.train_data["ic_inputs"])

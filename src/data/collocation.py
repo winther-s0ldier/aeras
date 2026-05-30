@@ -31,13 +31,22 @@ def residual_adaptive_resample(
     top_fraction: float = 0.3,
     noise_std: float = 0.02,
     device: str = "cpu",
+    chunk_size: int = 10_000,
 ) -> torch.Tensor:
     model.eval()
 
+    # Compute residuals in chunks to avoid OOM on large collocation pools
+    residual_chunks = []
+    for i in range(0, len(current_points), chunk_size):
+        chunk = current_points[i: i + chunk_size].to(device)
+        with torch.enable_grad():
+            res = compute_residual_fn(model, chunk)
+            mag = res.detach().abs()
+            if mag.dim() > 1 and mag.shape[1] > 1:
+                mag = mag.mean(dim=1)
+            residual_chunks.append(mag.squeeze().cpu())
+    residual_mag = torch.cat(residual_chunks, dim=0)
 
-    with torch.enable_grad():
-        residual = compute_residual_fn(model, current_points.to(device))
-        residual_mag = residual.detach().abs().squeeze()
 
 
     n_top = int(len(current_points) * top_fraction)

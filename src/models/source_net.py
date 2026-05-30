@@ -88,8 +88,8 @@ class SourceNet(nn.Module):
     def get_source_map(
         self,
         t_value: float,
-        hour_value: float = 0.5,
-        dow_value: float = 0.5,
+        _hour_value: float = 0.5,
+        _dow_value: float = 0.5,
         resolution: int = 50,
         device: str = "cpu",
     ) -> np.ndarray:
@@ -101,8 +101,6 @@ class SourceNet(nn.Module):
             xx.flatten(),
             yy.flatten(),
             torch.full((resolution ** 2,), t_value),
-            torch.full((resolution ** 2,), hour_value),
-            torch.full((resolution ** 2,), dow_value),
         ], dim=1).to(device)
 
         with torch.no_grad():

@@ -26,10 +26,7 @@ def load_test_data(split_name: str) -> dict:
 
     input_cols = ["x_norm", "y_norm", "t_norm",
                   "u_wind_norm", "v_wind_norm",
-                  "temp_norm", "blh_norm",
-                  "hour_sin", "hour_cos",
-                  "doy_sin", "doy_cos",
-                  "is_holiday"]
+                  "temp_norm", "blh_norm"]
     target_col = "pm25_norm"
 
     available_inputs = [c for c in input_cols if c in df.columns]

@@ -103,57 +103,47 @@ def compute_pde_residual(
 ) -> torch.Tensor:
 
     inputs = inputs.requires_grad_(True)
-
-
     C = model(inputs)
-
-
     u_wind = inputs[:, 3:4]
     v_wind = inputs[:, 4:5]
 
+    residuals = []
+    for i in range(C.shape[1]):
+        Ci = C[:, i:i+1]
+        grad_Ci = torch.autograd.grad(
+            Ci, inputs,
+            grad_outputs=torch.ones_like(Ci),
+            create_graph=True,
+            retain_graph=True,
+        )[0]
 
-    grad_C = torch.autograd.grad(
-        C, inputs,
-        grad_outputs=torch.ones_like(C),
-        create_graph=True,
-        retain_graph=True,
-    )[0]
+        dCi_dx = grad_Ci[:, 0:1]
+        dCi_dy = grad_Ci[:, 1:2]
+        dCi_dt = grad_Ci[:, 2:3]
 
-    dC_dx = grad_C[:, 0:1]
-    dC_dy = grad_C[:, 1:2]
-    dC_dt = grad_C[:, 2:3]
+        d2Ci_dx2 = torch.autograd.grad(
+            dCi_dx, inputs,
+            grad_outputs=torch.ones_like(dCi_dx),
+            create_graph=True,
+            retain_graph=True,
+        )[0][:, 0:1]
 
+        d2Ci_dy2 = torch.autograd.grad(
+            dCi_dy, inputs,
+            grad_outputs=torch.ones_like(dCi_dy),
+            create_graph=True,
+            retain_graph=True,
+        )[0][:, 1:2]
 
-    d2C_dx2 = torch.autograd.grad(
-        dC_dx, inputs,
-        grad_outputs=torch.ones_like(dC_dx),
-        create_graph=True,
-        retain_graph=True,
-    )[0][:, 0:1]
+        advection_i = u_wind * dCi_dx + v_wind * dCi_dy
+        diffusion_i = model.Dx * d2Ci_dx2 + model.Dy * d2Ci_dy2
+        S_i = source_term[:, i:i+1] if source_term is not None else 0.0
+        deposition_i = model.lambda_dep * Ci
 
-    d2C_dy2 = torch.autograd.grad(
-        dC_dy, inputs,
-        grad_outputs=torch.ones_like(dC_dy),
-        create_graph=True,
-        retain_graph=True,
-    )[0][:, 1:2]
+        residual_i = dCi_dt + advection_i - diffusion_i - S_i + deposition_i
+        residuals.append(residual_i)
 
-
-    advection = u_wind * dC_dx + v_wind * dC_dy
-
-
-    diffusion = model.Dx * d2C_dx2 + model.Dy * d2C_dy2
-
-
-    S = source_term if source_term is not None else 0.0
-
-
-    deposition = model.lambda_dep * C
-
-
-    residual = dC_dt + advection - diffusion - S + deposition
-
-    return residual
+    return torch.cat(residuals, dim=1)
 
 
 def compute_boundary_residual(
@@ -164,11 +154,15 @@ def compute_boundary_residual(
     boundary_points = boundary_points.requires_grad_(True)
     C = model(boundary_points)
 
-    grad_C = torch.autograd.grad(
-        C, boundary_points,
-        grad_outputs=torch.ones_like(C),
-        create_graph=True,
-    )[0]
+    residuals = []
+    for i in range(C.shape[1]):
+        Ci = C[:, i:i+1]
+        grad_Ci = torch.autograd.grad(
+            Ci, boundary_points,
+            grad_outputs=torch.ones_like(Ci),
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        residuals.append(grad_Ci[:, normal_direction:normal_direction + 1])
 
-    dC_dn = grad_C[:, normal_direction:normal_direction + 1]
-    return dC_dn
+    return torch.cat(residuals, dim=1)

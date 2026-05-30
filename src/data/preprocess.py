@@ -2,7 +2,7 @@ import sys
 import json
 import warnings
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -369,11 +369,309 @@ def merge_datasets(cpcb_df: pd.DataFrame, era5_df: pd.DataFrame) -> pd.DataFrame
     return merged
 
 
+def assert_no_all_nan(df: pd.DataFrame, new_cols: list, source: str = "merge"):
+    for c in new_cols:
+        if c not in df.columns:
+            raise ValueError(f"[ASSERT/{source}] Expected column '{c}' missing after merge.")
+        n_nan = df[c].isna().sum()
+        n_total = len(df)
+        if n_total == 0:
+            raise ValueError(f"[ASSERT/{source}] DataFrame is empty.")
+        if n_nan == n_total:
+            raise ValueError(f"[ASSERT/{source}] Column '{c}' is 100% NaN — merge silently failed.")
+        frac = n_nan / n_total
+        if frac > 0.5:
+            print(f"[ASSERT/{source}] WARN: '{c}' is {frac*100:.1f}% NaN — high but not all.")
+        else:
+            print(f"[ASSERT/{source}] OK: '{c}' has {(1-frac)*100:.1f}% coverage.")
+
+
+def add_firms_features(df: pd.DataFrame, firms_dir: Path = None) -> pd.DataFrame:
+    if firms_dir is None:
+        firms_dir = RAW_DIR / "firms"
+
+    firms_files = sorted(firms_dir.glob("*.csv"))
+    if not firms_files:
+        print("[FIRMS] No CSV files found — filling fire features with zeros.")
+        df["fire_count_daily"] = 0.0
+        df["fire_count_7day"] = 0.0
+        return df
+
+    print(f"[FIRMS] Loading {len(firms_files)} files...")
+    chunks = []
+    for f in firms_files:
+        try:
+            chunks.append(pd.read_csv(f, low_memory=False))
+        except Exception as e:
+            print(f"[FIRMS] Failed to load {f.name}: {e}")
+    if not chunks:
+        df["fire_count_daily"] = 0.0
+        df["fire_count_7day"] = 0.0
+        return df
+
+    firms = pd.concat(chunks, ignore_index=True)
+    if "acq_date" not in firms.columns:
+        date_col = next((c for c in firms.columns if "date" in c.lower()), None)
+        if date_col is None:
+            print("[FIRMS] No date column found — skipping.")
+            df["fire_count_daily"] = 0.0
+            df["fire_count_7day"] = 0.0
+            return df
+        firms = firms.rename(columns={date_col: "acq_date"})
+
+    firms["acq_date"] = pd.to_datetime(firms["acq_date"], errors="coerce")
+    firms = firms.dropna(subset=["acq_date"])
+    print(f"[FIRMS] {len(firms):,} fire detections, "
+          f"{firms['acq_date'].min().date()} to {firms['acq_date'].max().date()}")
+
+    daily = firms.groupby(firms["acq_date"].dt.normalize()).size().rename("fire_count_daily")
+    daily.index = pd.to_datetime(daily.index)
+
+    t_min = df["timestamp"].min().normalize()
+    t_max = df["timestamp"].max().normalize()
+    full_idx = pd.date_range(t_min, t_max, freq="1D")
+    daily_full = daily.reindex(full_idx, fill_value=0)
+    rolling_7d = daily_full.rolling(7, min_periods=1).sum().rename("fire_count_7day")
+
+    fire_df = pd.DataFrame({
+        "fire_count_daily": daily_full,
+        "fire_count_7day": rolling_7d,
+    })
+    fire_df.index.name = "_date"
+    fire_df = fire_df.reset_index()
+
+    df["_date"] = df["timestamp"].dt.normalize()
+    df = df.merge(fire_df, on="_date", how="left").drop(columns=["_date"])
+    df["fire_count_daily"] = df["fire_count_daily"].fillna(0)
+    df["fire_count_7day"] = df["fire_count_7day"].fillna(0)
+
+    winter_mask = df["timestamp"].dt.month.isin([10, 11, 12, 1])
+    mean_winter = df.loc[winter_mask, "fire_count_daily"].mean()
+    mean_other = df.loc[~winter_mask, "fire_count_daily"].mean()
+    print(f"[FIRMS] Daily fire count — winter mean: {mean_winter:.1f} | non-winter mean: {mean_other:.1f}")
+
+    for col in ["fire_count_daily", "fire_count_7day"]:
+        cmin = float(df[col].quantile(0.01))
+        cmax = float(df[col].quantile(0.99))
+        if cmax - cmin < 1e-8:
+            df[f"{col}_norm"] = 0.0
+        else:
+            df[f"{col}_norm"] = ((df[col] - cmin) / (cmax - cmin)).clip(0, 1).fillna(0)
+        print(f"[FIRMS] Normalized {col} -> {col}_norm, range [{cmin:.0f}, {cmax:.0f}]")
+
+    assert_no_all_nan(df, ["fire_count_daily_norm", "fire_count_7day_norm"], source="FIRMS")
+    return df
+
+
+def add_modis_aod(df: pd.DataFrame, modis_dir: Path = None, station_coords: pd.DataFrame = None) -> pd.DataFrame:
+    if modis_dir is None:
+        modis_dir = RAW_DIR / "modis"
+
+    try:
+        from pyhdf.SD import SD, SDC
+    except ImportError:
+        print("[MODIS] pyhdf not installed — skipping AOD merge. (Install with: pip install pyhdf)")
+        df["aod_norm"] = 0.0
+        return df
+
+    hdf_files = sorted(modis_dir.rglob("*.hdf"))
+    if not hdf_files:
+        print("[MODIS] No HDF files found — skipping AOD merge.")
+        df["aod_norm"] = 0.0
+        return df
+
+    print(f"[MODIS] Processing {len(hdf_files)} HDF files...")
+
+    records = []
+    failed = 0
+    for f in hdf_files:
+        try:
+            stem = f.stem
+            parts = stem.split(".")
+            year_doy = next((p for p in parts if p.startswith("A") and len(p) == 8), None)
+            if year_doy is None:
+                failed += 1
+                continue
+            year = int(year_doy[1:5])
+            doy = int(year_doy[5:8])
+            date = datetime(year, 1, 1) + timedelta(days=doy - 1)
+
+            hdf = SD(str(f), SDC.READ)
+            aod_var_candidates = ["Optical_Depth_055", "AOD_550_Dark_Target_Deep_Blue_Combined",
+                                  "Optical_Depth_Land_And_Ocean"]
+            aod_data = None
+            for vn in aod_var_candidates:
+                try:
+                    obj = hdf.select(vn)
+                    aod_data = obj[:].astype(np.float64)
+                    attrs = obj.attributes()
+                    obj.endaccess()
+                    scale = attrs.get("scale_factor", 0.001)
+                    fill = attrs.get("_FillValue", -28672)
+                    aod_data = np.where(aod_data == fill, np.nan, aod_data * scale)
+                    break
+                except Exception:
+                    continue
+            hdf.end()
+
+            if aod_data is None:
+                failed += 1
+                continue
+
+            mean_aod = float(np.nanmean(aod_data))
+            if np.isfinite(mean_aod):
+                records.append({"date": date, "aod": mean_aod})
+        except Exception as e:
+            failed += 1
+            if failed <= 3:
+                print(f"[MODIS] Failed {f.name}: {e}")
+
+    if failed > 0:
+        print(f"[MODIS] {failed}/{len(hdf_files)} files failed to parse.")
+
+    if not records:
+        print("[MODIS] No valid AOD values extracted — skipping.")
+        df["aod_norm"] = 0.0
+        return df
+
+    modis_df = pd.DataFrame(records)
+    daily_aod = modis_df.groupby("date")["aod"].mean().reset_index()
+    daily_aod["date"] = pd.to_datetime(daily_aod["date"])
+    print(f"[MODIS] {len(daily_aod):,} daily AOD values, mean={daily_aod['aod'].mean():.3f}")
+
+    df["_date"] = df["timestamp"].dt.normalize()
+    df = df.merge(daily_aod, left_on="_date", right_on="date", how="left").drop(columns=["_date", "date"])
+    df = df.sort_values(["station", "timestamp"]).reset_index(drop=True)
+    df["aod"] = df.groupby("station")["aod"].transform(lambda s: s.ffill(limit=72).bfill(limit=72))
+
+    aod_min = float(df["aod"].quantile(0.01))
+    aod_max = float(df["aod"].quantile(0.99))
+    if aod_max - aod_min < 1e-8:
+        df["aod_norm"] = 0.0
+    else:
+        df["aod_norm"] = ((df["aod"] - aod_min) / (aod_max - aod_min)).clip(0, 1).fillna(0)
+
+    coverage = df["aod"].notna().mean() * 100
+    print(f"[MODIS] AOD merged. Coverage: {coverage:.1f}%, range [{aod_min:.3f}, {aod_max:.3f}]")
+
+    assert_no_all_nan(df, ["aod_norm"], source="MODIS")
+    return df
+
+
+def add_sentinel5p(df: pd.DataFrame, s5p_dir: Path = None, station_coords: pd.DataFrame = None) -> pd.DataFrame:
+    if s5p_dir is None:
+        s5p_dir = RAW_DIR / "s5p"
+
+    nc_files = sorted(s5p_dir.rglob("*.nc"))
+    if not nc_files:
+        print("[S5P] No NetCDF files found — skipping.")
+        df["s5p_norm"] = 0.0
+        return df
+
+    import xarray as xr
+
+    sample = nc_files[0].name.upper()
+    product_map = {
+        "AER_AI": (["absorbing_aerosol_index", "aerosol_index_354_388"], "aer_ai"),
+        "NO2___": (["nitrogendioxide_tropospheric_column"], "no2"),
+        "SO2___": (["sulfurdioxide_total_vertical_column"], "so2"),
+        "CO____": (["carbonmonoxide_total_column"], "co"),
+        "HCHO__": (["formaldehyde_tropospheric_vertical_column"], "hcho"),
+    }
+    var_names, out_short = None, None
+    for token, (vns, short) in product_map.items():
+        if token in sample:
+            var_names, out_short = vns, short
+            break
+    if var_names is None:
+        print(f"[S5P] Unknown product type in {sample} — skipping.")
+        df["s5p_norm"] = 0.0
+        return df
+
+    print(f"[S5P] Detected product: {out_short.upper()} | Processing {len(nc_files)} files...")
+
+    lat_lo, lat_hi = DELHI_LAT_RANGE
+    lon_lo, lon_hi = DELHI_LON_RANGE
+    records = []
+    failed = 0
+    for f in nc_files:
+        try:
+            ds = xr.open_dataset(f, group="PRODUCT")
+            var_name = next((vn for vn in var_names if vn in ds.data_vars), None)
+            if var_name is None:
+                failed += 1
+                ds.close()
+                continue
+            lat = ds["latitude"].values.flatten()
+            lon = ds["longitude"].values.flatten()
+            vals = ds[var_name].values.flatten()
+            ts_arr = ds["time"].values
+            time_val = pd.to_datetime(ts_arr[0]) if len(ts_arr) > 0 else None
+            ds.close()
+
+            if time_val is None:
+                failed += 1
+                continue
+
+            mask = (
+                (lat >= lat_lo) & (lat <= lat_hi) &
+                (lon >= lon_lo) & (lon <= lon_hi) &
+                np.isfinite(vals)
+            )
+            if mask.sum() > 0:
+                mean_val = float(np.nanmean(vals[mask]))
+                records.append({"timestamp": time_val, "value": mean_val})
+        except Exception as e:
+            failed += 1
+            if failed <= 3:
+                print(f"[S5P] Failed {f.name}: {e}")
+
+    if failed > 0:
+        print(f"[S5P] {failed}/{len(nc_files)} files failed to parse.")
+
+    out_col_raw = out_short
+    out_col_norm = f"{out_short}_norm"
+
+    if not records:
+        print("[S5P] No valid values extracted — filling with zeros.")
+        df[out_col_norm] = 0.0
+        return df
+
+    s5p_df = pd.DataFrame(records).sort_values("timestamp")
+    print(f"[S5P] {len(s5p_df)} overpass values, "
+          f"{s5p_df['timestamp'].min()} to {s5p_df['timestamp'].max()}")
+
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["timestamp"] = df["timestamp"].astype("datetime64[us]")
+    s5p_df["timestamp"] = s5p_df["timestamp"].astype("datetime64[us]")
+
+
+    df = pd.merge_asof(
+        df, s5p_df.rename(columns={"value": out_col_raw}),
+        on="timestamp", direction="nearest",
+        tolerance=pd.Timedelta("3D"),
+    )
+
+    val_min = float(df[out_col_raw].quantile(0.01))
+    val_max = float(df[out_col_raw].quantile(0.99))
+    if val_max - val_min < 1e-12:
+        df[out_col_norm] = 0.0
+    else:
+        df[out_col_norm] = ((df[out_col_raw] - val_min) / (val_max - val_min)).clip(0, 1).fillna(0)
+
+    coverage = df[out_col_raw].notna().mean() * 100
+    print(f"[S5P] {out_short.upper()} merged. Coverage: {coverage:.1f}%, range [{val_min:.3e}, {val_max:.3e}]")
+
+    assert_no_all_nan(df, [out_col_norm], source="S5P")
+    return df
+
+
 def normalize_and_split(df: pd.DataFrame, station_coords: pd.DataFrame):
     print("[NORM] Normalizing features...")
 
 
-    norm_cols = ["pm25", "u_wind", "v_wind", "temperature", "boundary_layer_height"]
+    norm_cols = ["pm25", "no2", "o3", "so2", "u_wind", "v_wind", "temperature", "boundary_layer_height",
+                 "fire_count_daily", "fire_count_7day"]
     norm_cols = [c for c in norm_cols if c in df.columns]
 
 
@@ -492,10 +790,13 @@ def load_station_hour_data(spatial_dir: Path = None) -> pd.DataFrame:
 
     print(f"[SH] Loading {sh_path.name} ({sh_path.stat().st_size // (1024*1024):.0f} MB)...")
     sh = pd.read_csv(sh_path, low_memory=False,
-                     usecols=["StationId", "Datetime", "PM2.5"])
-    sh.columns = ["station_id", "timestamp", "pm25"]
+                     usecols=["StationId", "Datetime", "PM2.5", "NO2", "O3", "SO2"])
+    sh.columns = ["station_id", "timestamp", "pm25", "no2", "o3", "so2"]
     sh["timestamp"] = pd.to_datetime(sh["timestamp"], errors="coerce")
     sh["pm25"] = pd.to_numeric(sh["pm25"], errors="coerce")
+    sh["no2"] = pd.to_numeric(sh["no2"], errors="coerce")
+    sh["o3"] = pd.to_numeric(sh["o3"], errors="coerce")
+    sh["so2"] = pd.to_numeric(sh["so2"], errors="coerce")
 
 
     sh = sh[sh["station_id"].str.startswith("DL", na=False)].copy()
@@ -514,7 +815,6 @@ def load_station_hour_data(spatial_dir: Path = None) -> pd.DataFrame:
 
     from src.config import YEARS
     sh = sh[sh["timestamp"].dt.year.isin(YEARS)].copy()
-
 
     sh = add_station_coordinates(sh)
 
@@ -535,7 +835,7 @@ def load_station_hour_data(spatial_dir: Path = None) -> pd.DataFrame:
           f"{sh['timestamp'].min().date()} to {sh['timestamp'].max().date()}")
     print(f"[SH] PM2.5 available: {sh['pm25'].notna().mean()*100:.1f}%")
 
-    return sh[["timestamp", "station", "pm25", "latitude", "longitude"]]
+    return sh[["timestamp", "station", "pm25", "no2", "o3", "so2", "latitude", "longitude"]]
 
 
 NCR_CITY_COORDS = {
@@ -627,14 +927,22 @@ def run_pipeline():
               f"({sh_df['station'].nunique()} stations).")
         cpcb_df = sh_df.copy()
 
-        cpcb_df["pm25"] = cpcb_df["pm25"].clip(lower=PM25_MIN, upper=PM25_MAX)
-
         def flag_outliers(grp):
             mean, std = grp.mean(), grp.std()
             if std > 0:
                 grp[(grp - mean).abs() > OUTLIER_SIGMA * std] = np.nan
             return grp
-        cpcb_df["pm25"] = cpcb_df.groupby("station")["pm25"].transform(flag_outliers)
+
+        POLLUTANT_BOUNDS = {
+            "pm25": (PM25_MIN, PM25_MAX),
+            "no2":  (0.0, 500.0),
+            "o3":   (0.0, 500.0),
+            "so2":  (0.0, 500.0),
+        }
+        for poll, (lo, hi) in POLLUTANT_BOUNDS.items():
+            if poll in cpcb_df.columns:
+                cpcb_df[poll] = cpcb_df[poll].clip(lower=lo, upper=hi)
+                cpcb_df[poll] = cpcb_df.groupby("station")[poll].transform(flag_outliers)
     else:
 
         print("\n[PIPELINE] station_hour.csv not available — falling back to delhi_aqi.csv.")
@@ -668,6 +976,13 @@ def run_pipeline():
     else:
         print("[WARN] Skipping ERA5 merge — using CPCB data only for now.")
         merged = cpcb_df
+
+
+    print("\n[PHASE 3] External data merges starting...")
+    merged = add_firms_features(merged)
+    merged = add_modis_aod(merged, station_coords=station_coords)
+    merged = add_sentinel5p(merged, station_coords=station_coords)
+    print("[PHASE 3] External data merges complete.\n")
 
 
     merged.to_parquet(PROCESSED_DIR / "merged_hourly.parquet", index=False)

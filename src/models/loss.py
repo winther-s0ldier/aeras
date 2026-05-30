@@ -63,13 +63,28 @@ class AerasLoss(nn.Module):
         pred: torch.Tensor,
         target: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None,
+        underpred_alpha: float = 3.0,
     ) -> torch.Tensor:
         diff = pred - target
+        asymm = torch.where(diff < 0, underpred_alpha, 1.0)
+        sq = asymm * (diff ** 2)
+
         if mask is not None:
-            diff = diff * mask
-            n = mask.sum().clamp(min=1)
-            return (diff ** 2).sum() / n
-        return (diff ** 2).mean()
+            sq = sq * mask
+        if weight is not None:
+            sq = sq * weight
+
+        if mask is not None and weight is not None:
+            denom = (mask * weight).sum().clamp(min=1)
+        elif mask is not None:
+            denom = mask.sum().clamp(min=1)
+        elif weight is not None:
+            denom = weight.sum().clamp(min=1)
+        else:
+            denom = torch.tensor(float(diff.numel()), device=diff.device)
+
+        return sq.sum() / denom
 
     def pde_loss(self, residual: torch.Tensor) -> torch.Tensor:
         return (residual ** 2).mean()

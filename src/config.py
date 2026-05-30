@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 PROJECT_NAME = "aeras"
 PROJECT_DESCRIPTION = "Physics-Informed Neural Network for Delhi NCR Air Quality"
 WANDB_PROJECT = "aeras"
-CHECKPOINT_PREFIX = "aeras"  # used for filenames: aeras_final.pt, aeras_epoch_5000.pt
+CHECKPOINT_PREFIX = "aeras_v8_3yr_multipol"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
@@ -60,8 +60,8 @@ INDIAN_HOLIDAYS = {
     "2020-11-12", "2020-11-13", "2020-11-15", "2020-11-16",
 }
 
-YEARS = [2015, 2016, 2017, 2018, 2019, 2020]
-POLLUTANTS = ["PM2.5", "PM10", "NO2", "SO2", "CO", "O3"]
+YEARS = [2018, 2019, 2020]
+POLLUTANTS = ["PM2.5", "NO2", "O3", "SO2"]
 TARGET_POLLUTANT = "PM2.5"
 
 
@@ -73,14 +73,14 @@ PM25_MAX = 1000.0
 
 
 HIDDEN_LAYERS = 8
-HIDDEN_DIM = 128
+HIDDEN_DIM = 256                   # Run D: 128 → 256 (MLP bottleneck was too tight for 16-dim Fourier input)
 ACTIVATION = "tanh"
-FOURIER_FEATURES = 64
-FOURIER_SIGMA = 10.0
+FOURIER_FEATURES = 128             # Run D: 64 → 128 (more freq resolution for wider input space)
+FOURIER_SIGMA = 5.0                # Run D: 10 → 5 (σ√d ≈ 20; keeps projections out of sin/cos aliasing regime)
 
 
-INPUT_DIM = 12
-OUTPUT_DIM = 1
+INPUT_DIM = 7
+OUTPUT_DIM = 4
 
 
 LEARNING_RATE = 1e-3

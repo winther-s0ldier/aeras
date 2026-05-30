@@ -26,8 +26,9 @@ class AQSequenceDataset(Dataset):
         self.output_window = output_window
 
         if feature_cols is None:
-            feature_cols = ["pm25_norm", "u_wind_norm", "v_wind_norm", "temperature_norm"]
-        feature_cols = [c for c in feature_cols if c in data.columns]
+            feature_cols = [c for c in data.columns if c.endswith("_norm")]
+        else:
+            feature_cols = [c for c in feature_cols if c in data.columns]
 
         self.features = data[feature_cols].values.astype(np.float32)
         self.targets = data[target_col].values.astype(np.float32)

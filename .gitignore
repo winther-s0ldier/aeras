@@ -52,3 +52,5 @@ dashboard/build/
 PLAYBOOK.md
 HANDOFF.md
 claude.md
+# Logs
+experiments/
