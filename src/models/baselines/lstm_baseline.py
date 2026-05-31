@@ -30,7 +30,10 @@ class AQSequenceDataset(Dataset):
         else:
             feature_cols = [c for c in feature_cols if c in data.columns]
 
-        self.features = data[feature_cols].values.astype(np.float32)
+        # fillna(0) on features so that NaN in secondary pollutant columns
+        # (no2_norm, o3_norm, so2_norm) does not discard valid pm25 windows.
+        # Target NaN is still checked below and those windows are excluded.
+        self.features = data[feature_cols].fillna(0).values.astype(np.float32)
         self.targets = data[target_col].values.astype(np.float32)
 
 
@@ -155,7 +158,8 @@ def _eval_lstm_test_sets(model: LSTMBaseline, norm_params: dict, splits_dir: Pat
             continue
 
         df_test = pd.read_parquet(path)
-        dataset = AQSequenceDataset(df_test, input_window=24, output_window=1)
+        # output_window=24 must match training; take index 0 (1h-ahead) for metrics
+        dataset = AQSequenceDataset(df_test, input_window=24, output_window=24)
         if len(dataset) == 0:
             print(f"[LSTM] {split_name}: no valid windows, skipping.")
             continue
@@ -166,12 +170,12 @@ def _eval_lstm_test_sets(model: LSTMBaseline, norm_params: dict, splits_dir: Pat
         with torch.no_grad():
             for x, y in loader:
                 x = x.to(device)
-                pred = model(x).cpu().numpy()
+                pred = model(x).cpu().numpy()   # (batch, 24)
                 preds.append(pred)
-                trues.append(y.numpy())
+                trues.append(y.numpy())         # (batch, 24)
 
-        pred_norm = np.concatenate(preds).flatten()
-        true_norm = np.concatenate(trues).flatten()
+        pred_norm = np.concatenate(preds)[:, 0]   # 1h-ahead only, shape (N,)
+        true_norm = np.concatenate(trues)[:, 0]   # 1h-ahead only, shape (N,)
 
         pred = pred_norm * (pm25_max - pm25_min) + pm25_min
         true = true_norm * (pm25_max - pm25_min) + pm25_min

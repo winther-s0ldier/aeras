@@ -1,8 +1,11 @@
+import sys
 import numpy as np
 import pandas as pd
 from typing import Tuple, Dict
 import json
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 
 def create_features(df: pd.DataFrame, target_col: str = "pm25") -> pd.DataFrame:
