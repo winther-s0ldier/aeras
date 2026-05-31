@@ -157,6 +157,30 @@ class AerasTrainer:
 
         return add_features(x_xyt), add_features(y_xyt)
 
+    def _log_physics_params(self):
+        """Generate per-pollutant physics dict for WandB. Handles scalar (legacy) and vector params."""
+        POLLUTANT_NAMES = ["pm25", "no2", "o3", "so2"]
+        dx = self.model.Dx
+        dy = self.model.Dy
+        lam = self.model.lambda_dep
+        log_lam = self.model.log_lambda_dep
+
+        out = {}
+        n = dx.numel()
+        if n == 1:
+            out["physics/Dx"] = dx.flatten()[0].item()
+            out["physics/Dy"] = dy.flatten()[0].item()
+            out["physics/lambda_dep"] = lam.flatten()[0].item()
+            out["physics/log_lambda_dep"] = log_lam.flatten()[0].item()
+        else:
+            for i in range(n):
+                poll = POLLUTANT_NAMES[i] if i < len(POLLUTANT_NAMES) else f"out{i}"
+                out[f"physics/{poll}_Dx"] = dx[i].item()
+                out[f"physics/{poll}_Dy"] = dy[i].item()
+                out[f"physics/{poll}_lambda_dep"] = lam[i].item()
+                out[f"physics/{poll}_log_lambda_dep"] = log_lam[i].item()
+        return out
+
     def train_step(self, epoch: int) -> Dict[str, float]:
         self.model.train()
         if self.source_model:
@@ -310,10 +334,7 @@ class AerasTrainer:
                         "val/mse": val_metrics["val_mse"],
                         "val/mae": val_metrics["val_mae"],
                         "val/physics_residual": val_metrics["physics_residual"],
-                        "physics/Dx": self.model.Dx.item(),
-                        "physics/Dy": self.model.Dy.item(),
-                        "physics/lambda_dep": self.model.lambda_dep.item(),
-                        "physics/log_lambda_dep": self.model.log_lambda_dep.item(),
+                        **self._log_physics_params(),
                         "lr": self.optimizer.param_groups[0]["lr"],
                     })
 
@@ -323,23 +344,27 @@ class AerasTrainer:
 
 
             if epoch > 0 and epoch % 5000 == 0 and epoch > CURRICULUM_DATA_ONLY_EPOCHS:
-                print(f"[TRAIN] Resampling collocation points (RAR)...")
-                new_points = residual_adaptive_resample(
-                    self.model,
-                    self.collocation_points[:, :3],
-                    lambda m, p: compute_pde_residual(
-                        m, torch.cat([p, torch.zeros(len(p), self.train_data["inputs"].shape[1] - 3, device=self.device)], dim=1)
-                    ),
-                    n_new=NUM_COLLOCATION // 4,
-                    device=self.device,
-                )
+                if self.train_data["targets"].shape[1] > 1:
+                    print(f"[TRAIN] Skipping RAR — multi-pollutant mode (graph traversal cost too high). "
+                          f"Static collocation points retained.")
+                else:
+                    print(f"[TRAIN] Resampling collocation points (RAR)...")
+                    new_points = residual_adaptive_resample(
+                        self.model,
+                        self.collocation_points[:, :3],
+                        lambda m, p: compute_pde_residual(
+                            m, torch.cat([p, torch.zeros(len(p), self.train_data["inputs"].shape[1] - 3, device=self.device)], dim=1)
+                        ),
+                        n_new=NUM_COLLOCATION // 4,
+                        device=self.device,
+                    )
 
 
-                keep_idx = torch.randperm(len(self.collocation_points))[:int(NUM_COLLOCATION * 0.75)]
-                old_points = self.collocation_points[keep_idx]
-                new_pts = new_points.to(self.device)
-                self.collocation_points = torch.cat([old_points, new_pts], dim=0)
-                print(f"[TRAIN] Collocation points updated: {len(self.collocation_points):,}")
+                    keep_idx = torch.randperm(len(self.collocation_points))[:int(NUM_COLLOCATION * 0.75)]
+                    old_points = self.collocation_points[keep_idx]
+                    new_pts = new_points.to(self.device)
+                    self.collocation_points = torch.cat([old_points, new_pts], dim=0)
+                    print(f"[TRAIN] Collocation points updated: {len(self.collocation_points):,}")
 
 
         self.save_checkpoint("final")

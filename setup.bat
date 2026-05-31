@@ -17,8 +17,5 @@ echo [4/4] Installing project dependencies...
 pip install -r requirements.txt
 
 echo.
-echo ============================================
-echo   Setup Complete!
 echo   Activate with: .venv\Scripts\activate
-echo ============================================
 pause

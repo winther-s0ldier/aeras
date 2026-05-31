@@ -148,13 +148,28 @@ def sparse_sensor_evaluation(
         keep_idx.sort()
 
         sparse_inputs = inputs[keep_idx].to(device)
-        sparse_targets = targets[keep_idx].numpy()
+        # .cpu() required — targets may be GPU-resident; .numpy() fails on CUDA tensors
+        sparse_targets = targets[keep_idx].cpu().numpy()
 
         model.eval()
         with torch.no_grad():
             pred = model(sparse_inputs).cpu().numpy()
 
-        metrics = compute_all_forward_metrics(pred.flatten(), sparse_targets.flatten())
+        # Extract PM2.5 channel (index 0) only — consistent with Run F sparse baseline.
+        # Flattening all 4 channels together would mix pollutant scales and corrupt metrics.
+        if pred.ndim == 2 and pred.shape[1] > 1:
+            pred_pm25 = pred[:, 0]
+            true_pm25 = sparse_targets[:, 0]
+        else:
+            pred_pm25 = pred.flatten()
+            true_pm25 = sparse_targets.flatten()
+
+        # Mask out NaN rows — targets may have NaN for stations missing PM2.5 readings
+        valid = ~np.isnan(true_pm25)
+        pred_pm25 = pred_pm25[valid]
+        true_pm25 = true_pm25[valid]
+
+        metrics = compute_all_forward_metrics(pred_pm25, true_pm25)
         metrics["n_points"] = n_keep
         results[rate] = metrics
 

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 PROJECT_NAME = "aeras"
 PROJECT_DESCRIPTION = "Physics-Informed Neural Network for Delhi NCR Air Quality"
 WANDB_PROJECT = "aeras"
-CHECKPOINT_PREFIX = "aeras_v8_3yr_multipol"
+CHECKPOINT_PREFIX = "aeras_v9_perpoll_params"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"

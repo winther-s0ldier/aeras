@@ -23,6 +23,8 @@ def latin_hypercube(n_points: int, dim: int = 3, seed: int = 42) -> np.ndarray:
     return points
 
 
+# NOTE: Currently unstable for multi-output models due to graph-traversal cost.
+# Disabled in trainer for OUTPUT_DIM > 1. Future fix: rewrite with torch.func.vmap/jacrev.
 def residual_adaptive_resample(
     model: torch.nn.Module,
     current_points: torch.Tensor,

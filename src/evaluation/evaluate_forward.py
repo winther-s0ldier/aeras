@@ -27,10 +27,10 @@ def load_test_data(split_name: str) -> dict:
     input_cols = ["x_norm", "y_norm", "t_norm",
                   "u_wind_norm", "v_wind_norm",
                   "temp_norm", "blh_norm"]
-    target_col = "pm25_norm"
+    target_cols = ["pm25_norm", "no2_norm", "o3_norm", "so2_norm"]
 
     available_inputs = [c for c in input_cols if c in df.columns]
-    if len(available_inputs) < 3 or target_col not in df.columns:
+    if len(available_inputs) < 3:
         print(f"[EVAL] Missing columns. Available: {df.columns.tolist()}")
         return None
 
@@ -39,13 +39,11 @@ def load_test_data(split_name: str) -> dict:
         if col not in df.columns:
             df[col] = 0.0
 
-
-    df = df.dropna(subset=[target_col])
-
     inputs = torch.tensor(df[input_cols].values, dtype=torch.float32)
-    targets = torch.tensor(df[target_col].values, dtype=torch.float32).unsqueeze(1)
+    targets = torch.tensor(df[target_cols].values, dtype=torch.float32)  # [N, 4]
+    mask = torch.tensor(df[target_cols].notna().values, dtype=torch.float32)  # [N, 4]
 
-    return {"inputs": inputs, "targets": targets}
+    return {"inputs": inputs, "targets": targets, "mask": mask}
 
 
 def evaluate_all(checkpoint_name: str = "final"):
@@ -80,27 +78,46 @@ def evaluate_all(checkpoint_name: str = "final"):
     all_results = {}
     model.eval()
 
+    POLLUTANT_NAMES = ["pm25", "no2", "o3", "so2"]
+    DENORM_KEYS = {"pm25": "pm25", "no2": "no2", "o3": "o3", "so2": "so2"}
+
     for name, split in test_sets.items():
         data = load_test_data(split)
         if data is None:
             continue
 
         inputs = data["inputs"].to(DEVICE)
-        targets = data["targets"]
+        targets = data["targets"].numpy()  # [N, 4]
+        mask = data["mask"].numpy()  # [N, 4]
 
         with torch.no_grad():
-            pred = model(inputs).cpu()
+            pred = model(inputs).cpu().numpy()  # [N, 4]
 
-        metrics = compute_all_forward_metrics(
-            pred.numpy().flatten(),
-            targets.numpy().flatten(),
-            norm_params=norm_params,
-        )
-
-        all_results[name] = metrics
+        all_results[name] = {}
         print(f"\n[{name}]")
-        for k, v in metrics.items():
-            print(f"  {k}: {v:.4f}")
+        for i, poll in enumerate(POLLUTANT_NAMES):
+            valid = mask[:, i].astype(bool)
+            if valid.sum() < 100:
+                print(f"  {poll}: <100 valid samples, skipping")
+                continue
+
+            p = pred[valid, i]
+            t = targets[valid, i]
+
+            # Denormalize using saved params
+            if norm_params and DENORM_KEYS[poll] in norm_params:
+                pmin = norm_params[DENORM_KEYS[poll]]["min"]
+                pmax = norm_params[DENORM_KEYS[poll]]["max"]
+                p_denorm = p * (pmax - pmin) + pmin
+                t_denorm = t * (pmax - pmin) + pmin
+            else:
+                p_denorm = p
+                t_denorm = t
+
+            metrics = compute_all_forward_metrics(p_denorm, t_denorm, norm_params=None)
+            all_results[name][poll] = metrics
+
+            print(f"  {poll.upper()}: MAE={metrics['mae']:.2f}, RMSE={metrics['rmse']:.2f}, R²={metrics['r2']:.4f} (n={valid.sum()})")
 
 
     print("Sparse Sensor Degradation Test")
@@ -119,11 +136,25 @@ def evaluate_all(checkpoint_name: str = "final"):
     print(f"\n[EVAL] Results saved to {results_path}")
 
 
-    print("Learned Physics Parameters")
+    def _param_to_list(p):
+        if p.numel() == 1:
+            return [p.flatten()[0].item()]
+        return [p[i].item() for i in range(p.numel())]
 
-    print(f"  Dx (diffusion x): {model.Dx.item():.6f}")
-    print(f"  Dy (diffusion y): {model.Dy.item():.6f}")
-    print(f"  lambda (deposition):  {model.lambda_dep.item():.6f}")
+    POLLUTANT_NAMES = ["pm25", "no2", "o3", "so2"]
+    dx_vals = _param_to_list(model.Dx)
+    dy_vals = _param_to_list(model.Dy)
+    lam_vals = _param_to_list(model.lambda_dep)
+
+    print("Learned Physics Parameters")
+    if len(dx_vals) == 1:
+        print(f"  Dx (diffusion x): {dx_vals[0]:.6f}")
+        print(f"  Dy (diffusion y): {dy_vals[0]:.6f}")
+        print(f"  lambda (deposition): {lam_vals[0]:.6f}")
+    else:
+        for i in range(len(dx_vals)):
+            poll = POLLUTANT_NAMES[i] if i < len(POLLUTANT_NAMES) else f"out{i}"
+            print(f"  {poll.upper()}: Dx={dx_vals[i]:.6f}, Dy={dy_vals[i]:.6f}, lambda_dep={lam_vals[i]:.6f}")
 
     return all_results
 

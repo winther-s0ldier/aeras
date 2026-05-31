@@ -57,9 +57,9 @@ class AerasPINN(nn.Module):
         layers.append(nn.Linear(hidden_dim, OUTPUT_DIM))
         self.network = nn.Sequential(*layers)
 
-        self.log_Dx = nn.Parameter(torch.tensor(LOG_DX_INIT))
-        self.log_Dy = nn.Parameter(torch.tensor(LOG_DY_INIT))
-        self.log_lambda_dep = nn.Parameter(torch.tensor(float(np.log(LAMBDA_DEP_INIT))))
+        self.log_Dx = nn.Parameter(torch.full((OUTPUT_DIM,), float(LOG_DX_INIT)))
+        self.log_Dy = nn.Parameter(torch.full((OUTPUT_DIM,), float(LOG_DY_INIT)))
+        self.log_lambda_dep = nn.Parameter(torch.full((OUTPUT_DIM,), float(np.log(LAMBDA_DEP_INIT))))
 
         if self.inverse_mode:
             from src.models.source_net import SourceNet
@@ -136,9 +136,9 @@ def compute_pde_residual(
         )[0][:, 1:2]
 
         advection_i = u_wind * dCi_dx + v_wind * dCi_dy
-        diffusion_i = model.Dx * d2Ci_dx2 + model.Dy * d2Ci_dy2
+        diffusion_i = model.Dx[i] * d2Ci_dx2 + model.Dy[i] * d2Ci_dy2
         S_i = source_term[:, i:i+1] if source_term is not None else 0.0
-        deposition_i = model.lambda_dep * Ci
+        deposition_i = model.lambda_dep[i] * Ci
 
         residual_i = dCi_dt + advection_i - diffusion_i - S_i + deposition_i
         residuals.append(residual_i)
