@@ -150,5 +150,4 @@ class AerasLoss(nn.Module):
             "weights": weights.detach().cpu().tolist(),
         }
 
-# Backwards compatibility — remove after Phase 5
-VayuPINNLoss = AerasLoss
+

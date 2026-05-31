@@ -157,30 +157,6 @@ class AerasTrainer:
 
         return add_features(x_xyt), add_features(y_xyt)
 
-    def _log_physics_params(self):
-        """Generate per-pollutant physics dict for WandB. Handles scalar (legacy) and vector params."""
-        POLLUTANT_NAMES = ["pm25", "no2", "o3", "so2"]
-        dx = self.model.Dx
-        dy = self.model.Dy
-        lam = self.model.lambda_dep
-        log_lam = self.model.log_lambda_dep
-
-        out = {}
-        n = dx.numel()
-        if n == 1:
-            out["physics/Dx"] = dx.flatten()[0].item()
-            out["physics/Dy"] = dy.flatten()[0].item()
-            out["physics/lambda_dep"] = lam.flatten()[0].item()
-            out["physics/log_lambda_dep"] = log_lam.flatten()[0].item()
-        else:
-            for i in range(n):
-                poll = POLLUTANT_NAMES[i] if i < len(POLLUTANT_NAMES) else f"out{i}"
-                out[f"physics/{poll}_Dx"] = dx[i].item()
-                out[f"physics/{poll}_Dy"] = dy[i].item()
-                out[f"physics/{poll}_lambda_dep"] = lam[i].item()
-                out[f"physics/{poll}_log_lambda_dep"] = log_lam[i].item()
-        return out
-
     def train_step(self, epoch: int) -> Dict[str, float]:
         self.model.train()
         if self.source_model:
@@ -334,7 +310,10 @@ class AerasTrainer:
                         "val/mse": val_metrics["val_mse"],
                         "val/mae": val_metrics["val_mae"],
                         "val/physics_residual": val_metrics["physics_residual"],
-                        **self._log_physics_params(),
+                        "physics/Dx": self.model.Dx.item(),
+                        "physics/Dy": self.model.Dy.item(),
+                        "physics/lambda_dep": self.model.lambda_dep.item(),
+                        "physics/log_lambda_dep": self.model.log_lambda_dep.item(),
                         "lr": self.optimizer.param_groups[0]["lr"],
                     })
 
@@ -415,4 +394,5 @@ class AerasTrainer:
             json.dump(self.history, f, indent=2)
         print(f"[HISTORY] Saved to {path}")
 
-
+# Backwards compatibility — remove after Phase 5
+VayuPINNTrainer = AerasTrainer

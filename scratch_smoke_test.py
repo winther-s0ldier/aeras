@@ -1,6 +1,6 @@
 import torch, pandas as pd
 from src.config import SPLITS_DIR
-from src.training.trainer import VayuPINNTrainer
+from src.training.trainer import aerasTrainer
 
 train_df = pd.read_parquet(SPLITS_DIR / 'train.parquet')
 val_df   = pd.read_parquet(SPLITS_DIR / 'val.parquet')
@@ -15,6 +15,6 @@ def to_t(df):
             'ic_inputs': torch.tensor(ic[cols].values,dtype=torch.float32),
             'ic_targets':torch.tensor(ic['pm25_norm'].values,dtype=torch.float32).unsqueeze(1)}
 
-trainer = VayuPINNTrainer(to_t(train_df), to_t(val_df), use_wandb=False)
+trainer = aerasTrainer(to_t(train_df), to_t(val_df), use_wandb=False)
 trainer.train(epochs=100)
 print('SMOKE TEST PASSED')

@@ -49,7 +49,7 @@ def plot_training_curves(
     ), row=2, col=1)
 
     fig.update_layout(
-        title="VayuPINN Training Progress",
+        title="aeras Training Progress",
         template="plotly_dark",
         width=1200, height=800,
         showlegend=False,

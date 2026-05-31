@@ -5,19 +5,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 from src.config import CHECKPOINTS_DIR, PROCESSED_DIR, DEVICE
-from src.models.pinn import VayuPINN
+from src.models.pinn import AerasPINN
 from src.models.source_net import SourceNet
 
 
 class ModelLoader:
-    _pinn: VayuPINN = None
+    _pinn: AerasPINN = None
     _source: SourceNet = None
     _norm_params: dict = None
     device: str = DEVICE
 
     @classmethod
     def load(cls, checkpoint_name: str = "final"):
-        ckpt_path = CHECKPOINTS_DIR / f"vayupinn_{checkpoint_name}.pt"
+        ckpt_path = CHECKPOINTS_DIR / f"aeras_{checkpoint_name}.pt"
         if not ckpt_path.exists():
             print(f"[ModelLoader] Checkpoint not found: {ckpt_path}")
             print("[ModelLoader] API will run without a trained model (predictions unavailable).")
@@ -25,7 +25,7 @@ class ModelLoader:
 
         state = torch.load(ckpt_path, map_location=cls.device, weights_only=False)
 
-        cls._pinn = VayuPINN().to(cls.device)
+        cls._pinn = AerasPINN().to(cls.device)
         cls._pinn.load_state_dict(state["model"])
         cls._pinn.eval()
 
@@ -43,7 +43,7 @@ class ModelLoader:
         print(f"[ModelLoader] Loaded {ckpt_path.name} on {cls.device}")
 
     @classmethod
-    def get_pinn(cls) -> VayuPINN:
+    def get_pinn(cls) -> AerasPINN:
         return cls._pinn
 
     @classmethod

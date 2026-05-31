@@ -135,7 +135,7 @@ def plot_time_series_comparison(
 
     fig.add_trace(go.Scatter(
         x=times, y=pinn_pred,
-        mode="lines", name="VayuPINN",
+        mode="lines", name="aeras",
         line=dict(color="#00d4ff", width=2),
     ))
 

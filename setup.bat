@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   VayuPINN Environment Setup
+echo   aeras Environment Setup
 echo ============================================
 echo.
 

@@ -8,7 +8,7 @@ from src.config import CHECKPOINTS_DIR
 
 ABLATION_CONFIGS = {
     "full": {
-        "description": "VayuPINN with all components (baseline)",
+        "description": "aeras with all components (baseline)",
         "w_pde": 0.1,
         "w_data": 1.0,
         "w_bc": 0.01,

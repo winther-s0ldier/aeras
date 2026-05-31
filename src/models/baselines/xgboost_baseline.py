@@ -126,24 +126,91 @@ def train_xgboost(
     return models, metrics
 
 
-if __name__ == "__main__":
-    from src.config import SPLITS_DIR
-    import json
+def _per_station_features(df: pd.DataFrame, target_col: str = "pm25_norm") -> pd.DataFrame:
+    df = df.sort_values(["station", "timestamp"]).copy()
+    parts = []
+    for _, grp in df.groupby("station", sort=False):
+        parts.append(create_features(grp, target_col))
+    return pd.concat(parts, ignore_index=True)
 
+
+def _eval_test_sets(models: dict, norm_params: dict, splits_dir: Path) -> dict:
+    results = {}
+    pm25_min = norm_params.get("pm25", {}).get("min", 0.0)
+    pm25_max = norm_params.get("pm25", {}).get("max", 500.0)
+
+    for split_name, split_file in [
+        ("random",  "test_random"),
+        ("diwali",  "test_diwali"),
+        ("winter",  "test_winter"),
+    ]:
+        path = splits_dir / f"{split_file}.parquet"
+        if not path.exists():
+            print(f"[XGB] {split_file}.parquet not found, skipping.")
+            continue
+
+        df_test = pd.read_parquet(path)
+        test_feat = _per_station_features(df_test, "pm25_norm")
+
+        exclude = ["pm25_norm", "timestamp", "station", "latitude", "longitude"]
+        feature_cols = [c for c in test_feat.columns if c not in exclude and "_norm" not in c]
+
+        model_1h = models.get(1)
+        if model_1h is None:
+            continue
+
+        test_feat["target_1h"] = test_feat["pm25_norm"].shift(-1)
+        test_valid = test_feat.dropna(subset=["target_1h"])
+        avail_cols = [c for c in feature_cols if c in test_valid.columns]
+
+        pred_norm = model_1h.predict(test_valid[avail_cols].values)
+        true_norm = test_valid["target_1h"].values
+
+        pred = pred_norm * (pm25_max - pm25_min) + pm25_min
+        true = true_norm * (pm25_max - pm25_min) + pm25_min
+
+        mae  = float(np.mean(np.abs(pred - true)))
+        rmse = float(np.sqrt(np.mean((pred - true) ** 2)))
+        ss_res = np.sum((true - pred) ** 2)
+        ss_tot = np.sum((true - true.mean()) ** 2)
+        r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+        results[split_name] = {"mae": mae, "rmse": rmse, "r2": r2, "n": len(test_valid)}
+        print(f"[XGB] {split_name:10s} — MAE={mae:.2f}, RMSE={rmse:.2f}, R²={r2:.4f} (n={len(test_valid):,})")
+
+    return results
+
+
+if __name__ == "__main__":
+    import json
+    from src.config import SPLITS_DIR, PROCESSED_DIR
 
     print("  XGBoost Baseline Training")
 
     print("[XGB] Loading data...")
     train_df = pd.read_parquet(SPLITS_DIR / "train.parquet")
-    val_df = pd.read_parquet(SPLITS_DIR / "val.parquet")
+    val_df   = pd.read_parquet(SPLITS_DIR / "val.parquet")
+
+    print("[XGB] Building per-station lag features...")
+    train_feat = _per_station_features(train_df, "pm25_norm")
+    val_feat   = _per_station_features(val_df,   "pm25_norm")
 
     print("[XGB] Training models for multiple horizons...")
-    models, metrics = train_xgboost(train_df, val_df)
+    models, metrics = train_xgboost(train_feat, val_feat, target_col="pm25_norm")
 
-    print("\n[XGB] Training complete! Metrics on validation set:")
+    print("\n[XGB] Val set metrics (normalised):")
     for horizon, m in metrics.items():
-        print(f"  {horizon}h: MAE={m['mae']:.2f}, RMSE={m['rmse']:.2f}")
+        print(f"  {horizon}h: MAE={m['mae']:.4f}, RMSE={m['rmse']:.4f}")
 
-    with open("checkpoints/xgboost_metrics.json", "w") as f:
-        json.dump(metrics, f, indent=2)
-    print("[XGB] Saved metrics to checkpoints/xgboost_metrics.json")
+    norm_path = PROCESSED_DIR / "normalized_params.json"
+    norm_params = json.loads(norm_path.read_text()) if norm_path.exists() else {}
+
+    print("\n[XGB] OOD test set evaluation (denormalised, PM2.5 in ug/m3, 1h horizon):")
+    test_results = _eval_test_sets(models, norm_params, SPLITS_DIR)
+
+    all_results = {"val_normalised": metrics, "test_denormalised_1h": test_results}
+    out_path = Path("checkpoints/xgboost_metrics.json")
+    out_path.parent.mkdir(exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\n[XGB] Results saved to {out_path}")

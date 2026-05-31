@@ -21,7 +21,7 @@ def plot_source_map(
     if edgar_field is not None:
         fig = make_subplots(
             rows=1, cols=2,
-            subplot_titles=("VayuPINN (Learned)", "EDGAR Inventory (Reference)"),
+            subplot_titles=("aeras (Learned)", "EDGAR Inventory (Reference)"),
         )
 
         fig.add_trace(go.Heatmap(

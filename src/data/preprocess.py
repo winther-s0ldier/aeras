@@ -919,7 +919,7 @@ def load_spatial_cpcb_data(spatial_dir: Path = None) -> pd.DataFrame:
 
 def run_pipeline():
 
-    print("  VayuPINN — Data Preprocessing Pipeline")
+    print("  aeras — Data Preprocessing Pipeline")
 
     sh_df = load_station_hour_data()
     if sh_df is not None and len(sh_df) > 10000:

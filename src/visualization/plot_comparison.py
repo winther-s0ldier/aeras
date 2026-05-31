@@ -55,7 +55,7 @@ def plot_sparse_degradation(
         x=[f"{r:.0%}" for r in dropout_rates],
         y=pinn_values,
         mode="lines+markers",
-        name="VayuPINN",
+        name="aeras",
         line=dict(color="#00d4ff", width=3),
         marker=dict(size=10),
     ))

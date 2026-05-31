@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.config import CHECKPOINTS_DIR, RAW_DIR, DEVICE, CHECKPOINT_PREFIX
-from src.models.pinn import VayuPINN
+from src.models.pinn import AerasPINN
 from src.models.source_net import SourceNet, SourceGrid
 from src.evaluation.metrics import source_location_error, source_magnitude_error
 
