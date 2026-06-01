@@ -11,7 +11,6 @@ checkpoints/
 *.pth
 *.ckpt
 
-# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -24,33 +23,26 @@ build/
 venv/
 env/
 
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Jupyter
 .ipynb_checkpoints/
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Wandb
 wandb/
 
-# Environment
 .env
 
-# Node (dashboard)
 dashboard/node_modules/
 dashboard/dist/
 dashboard/build/
 PLAYBOOK.md
 HANDOFF.md
 claude.md
-# Logs
 experiments/
 
 *.bak_pre_phasek

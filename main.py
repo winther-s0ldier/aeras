@@ -46,6 +46,11 @@ def cmd_train(inverse: bool = False, resume: Optional[str] = None):
             val_df[col] = 0.0
 
     available = input_cols
+    
+    # Fill any NaNs in the inputs so the model doesn't output NaN
+    train_df[available] = train_df[available].fillna(0.0)
+    val_df[available] = val_df[available].fillna(0.0)
+    
     print(f"[MAIN] Using input features: {available}")
     if missing_era5:
         print(f"[MAIN] Note: {missing_era5} are zero-filled (ERA5 absent)")
