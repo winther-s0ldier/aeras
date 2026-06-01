@@ -38,6 +38,9 @@ def load_test_data(split_name: str) -> dict:
     for col in ["u_wind_norm", "v_wind_norm", "temp_norm", "blh_norm"]:
         if col not in df.columns:
             df[col] = 0.0
+    
+    # Fill any NaNs in the inputs so the model doesn't output NaN
+    df[input_cols] = df[input_cols].fillna(0.0)
 
     inputs = torch.tensor(df[input_cols].values, dtype=torch.float32)
     targets = torch.tensor(df[target_cols].values, dtype=torch.float32)  # [N, 4]
