@@ -18,6 +18,7 @@ from src.config import (
     DEVICE, USE_AMP, LEARNING_RATE, EPOCHS, BATCH_SIZE,
     CHECKPOINT_EVERY, CHECKPOINTS_DIR, NUM_COLLOCATION,
     CURRICULUM_DATA_ONLY_EPOCHS, CURRICULUM_PDE_RAMPUP_EPOCHS,
+    LBFGS_MAX_ITER, LBFGS_DATA_CHUNK, LBFGS_COLLOC_CHUNK,
 )
 from src.models.pinn import AerasPINN, compute_pde_residual, compute_boundary_residual
 from src.models.source_net import SourceNet, SourceGrid
@@ -381,7 +382,7 @@ class AerasTrainer:
         total_time = time.time() - start_time
         print(f"\n[TRAIN] Done! {epochs} epochs + L-BFGS in {total_time/3600:.1f} hours")
 
-    def lbfgs_phase(self, max_iter: int = 2000):
+    def lbfgs_phase(self, max_iter: int = None):
         """
         L-BFGS fine-tuning after Adam — directly from Raissi et al. 2019.
         Adam warms up the network; L-BFGS drives PDE residual toward machine precision
@@ -390,6 +391,13 @@ class AerasTrainer:
         AMP disabled: L-BFGS closure is called multiple times per step and float16
         intermediate states cause instability.
         """
+        # Read from config so notebook can override via src.config.LBFGS_* before training
+        import src.config as _cfg
+        if max_iter is None:
+            max_iter = _cfg.LBFGS_MAX_ITER
+        DATA_CHUNK   = _cfg.LBFGS_DATA_CHUNK
+        COLLOC_CHUNK = _cfg.LBFGS_COLLOC_CHUNK
+
         self.model.train()
         if self.source_model:
             self.source_model.train()
@@ -408,22 +416,12 @@ class AerasTrainer:
             line_search_fn="strong_wolfe",
         )
 
-        # Chunked full-batch L-BFGS — achieves true full-batch gradient quality
-        # without OOM on RTX 4050 (6GB).
-        #
-        # The memory issue with naive full-batch L-BFGS:
-        #   50k collocation × 4 outputs × 2nd-order autograd graph → ~4GB → OOM.
-        #
-        # The fix (chunked closure):
-        #   Evaluate data loss and PDE loss in small chunks, accumulate gradients
-        #   manually via .backward() on each chunk, then do one L-BFGS step on
-        #   the accumulated full-batch gradient. This is mathematically equivalent
-        #   to full-batch L-BFGS — the gradient passed to the Hessian approximation
-        #   is exact over the full dataset, not a noisy subsample.
-        #
-        # Chunk sizes tuned for RTX 4050: 2k data rows, 2k collocation per chunk.
-        DATA_CHUNK   = 2_000
-        COLLOC_CHUNK = 2_000
+        # Chunked full-batch L-BFGS (Raissi et al. 2019).
+        # Chunk sizes come from src.config (LBFGS_DATA_CHUNK, LBFGS_COLLOC_CHUNK).
+        # Override those before training to scale for your GPU:
+        #   RTX 4050 6GB  → DATA_CHUNK=2k,  COLLOC_CHUNK=2k
+        #   Kaggle T4 16GB → DATA_CHUNK=10k, COLLOC_CHUNK=10k
+        # Already set above from src.config.
 
         all_inputs  = self.train_data["inputs"]
         all_targets = self.train_data["targets"]

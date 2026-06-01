@@ -113,6 +113,11 @@ NUM_COLLOCATION = 100_000
 EPOCHS = 50_000
 CHECKPOINT_EVERY = 5_000
 
+# L-BFGS phase config — override in notebook for larger GPUs
+LBFGS_MAX_ITER   = 2_000
+LBFGS_DATA_CHUNK   = 2_000    # safe for RTX 4050 (6GB)
+LBFGS_COLLOC_CHUNK = 2_000    # safe for RTX 4050 (6GB)
+
 
 W_DATA = 1.0
 W_PDE = 0.1
