@@ -54,3 +54,5 @@ HANDOFF.md
 claude.md
 # Logs
 experiments/
+
+*.bak_pre_phasek

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 PROJECT_NAME = "aeras"
 PROJECT_DESCRIPTION = "Physics-Informed Neural Network for Delhi NCR Air Quality"
 WANDB_PROJECT = "aeras"
-CHECKPOINT_PREFIX = "aeras_v9_perpoll_params"
+CHECKPOINT_PREFIX = "aeras_v10_paper_faithful"
 
 # ── Environment detection ──────────────────────────────────────────
 # Kaggle mounts datasets at /kaggle/input/<dataset-slug>/
@@ -65,9 +65,19 @@ INDIAN_HOLIDAYS = {
     "2018-11-05", "2018-11-06", "2018-11-08", "2018-11-09",
     "2019-10-25", "2019-10-26", "2019-10-28", "2019-10-29",
     "2020-11-12", "2020-11-13", "2020-11-15", "2020-11-16",
+    # Diwali 2021 (Nov 4) + ±2 days
+    "2021-11-02", "2021-11-03", "2021-11-04", "2021-11-05", "2021-11-06",
+    # Diwali 2022 (Oct 24) + ±2 days
+    "2022-10-22", "2022-10-23", "2022-10-24", "2022-10-25", "2022-10-26",
+    # Holi 2021, 2022
+    "2021-03-29", "2022-03-18",
+    # Republic Day 2021, 2022
+    "2021-01-26", "2022-01-26",
+    # Independence Day 2021, 2022
+    "2021-08-15", "2022-08-15",
 }
 
-YEARS = [2018, 2019, 2020]
+YEARS = [2018, 2019, 2020, 2021, 2022]
 POLLUTANTS = ["PM2.5", "NO2", "O3", "SO2"]
 TARGET_POLLUTANT = "PM2.5"
 

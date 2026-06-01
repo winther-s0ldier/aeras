@@ -838,6 +838,57 @@ def load_station_hour_data(spatial_dir: Path = None) -> pd.DataFrame:
     return sh[["timestamp", "station", "pm25", "no2", "o3", "so2", "latitude", "longitude"]]
 
 
+def load_openaq_extension() -> pd.DataFrame:
+    """
+    Load OpenAQ data for 2020-07-02 onwards — the period not covered by the
+    Kaggle station_hour.csv. Merged with Kaggle data in run_pipeline() to
+    give 4 Diwali events in training (2018, 2019, 2020, 2021).
+
+    Schema matches load_station_hour_data() output:
+    timestamp, station, pm25, no2, o3, so2, latitude, longitude
+    """
+    openaq_dir = RAW_DIR / "cpcb" / "openaq"
+    cutoff = pd.Timestamp("2020-07-02", tz="UTC")
+
+    frames = []
+    for year in [2020, 2021, 2022]:
+        path = openaq_dir / f"openaq_{year}.parquet"
+        if not path.exists():
+            print(f"[OPENAQ-EXT] {path.name} not found, skipping.")
+            continue
+        df = pd.read_parquet(path)
+        # Only keep rows beyond the Kaggle cutoff
+        if df["timestamp"].dt.tz is None:
+            df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+        df = df[df["timestamp"] >= cutoff].copy()
+        frames.append(df)
+        print(f"[OPENAQ-EXT] {year}: {len(df):,} rows after cutoff filter")
+
+    if not frames:
+        print("[OPENAQ-EXT] No OpenAQ extension data found.")
+        return None
+
+    ext = pd.concat(frames, ignore_index=True)
+    # Strip timezone for consistency with Kaggle data
+    ext["timestamp"] = ext["timestamp"].dt.tz_localize(None)
+
+    # Apply same bbox filter as Kaggle data
+    from src.config import DELHI_LAT_RANGE, DELHI_LON_RANGE
+    lat_min, lat_max = DELHI_LAT_RANGE
+    lon_min, lon_max = DELHI_LON_RANGE
+    ext = ext[
+        ext["latitude"].between(lat_min, lat_max) &
+        ext["longitude"].between(lon_min, lon_max)
+    ].copy()
+
+    print(f"[OPENAQ-EXT] Total: {len(ext):,} rows | "
+          f"{ext['station'].nunique()} stations | "
+          f"PM2.5 coverage: {ext['pm25'].notna().mean()*100:.1f}%")
+
+    return ext[["timestamp", "station", "pm25", "no2", "o3", "so2",
+                "latitude", "longitude"]]
+
+
 NCR_CITY_COORDS = {
     "Delhi":         (28.6139, 77.2090),
     "Faridabad":     (28.4033, 77.3153),
@@ -926,6 +977,17 @@ def run_pipeline():
         print(f"\n[PIPELINE] Using station_hour.csv as primary source "
               f"({sh_df['station'].nunique()} stations).")
         cpcb_df = sh_df.copy()
+
+        # Extend with OpenAQ data (2020-07-02 to 2022-12-31).
+        # Adds Diwali 2020 and 2021 to training data.
+        openaq_ext = load_openaq_extension()
+        if openaq_ext is not None and len(openaq_ext) > 1000:
+            cpcb_df = pd.concat([cpcb_df, openaq_ext], ignore_index=True)
+            cpcb_df = cpcb_df.sort_values(["timestamp", "station"]).reset_index(drop=True)
+            print(f"[PIPELINE] After OpenAQ merge: {len(cpcb_df):,} rows | "
+                  f"{cpcb_df['station'].nunique()} stations | "
+                  f"{cpcb_df['timestamp'].min().date()} to "
+                  f"{cpcb_df['timestamp'].max().date()}")
 
         def flag_outliers(grp):
             mean, std = grp.mean(), grp.std()
