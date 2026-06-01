@@ -8,12 +8,19 @@ PROJECT_DESCRIPTION = "Physics-Informed Neural Network for Delhi NCR Air Quality
 WANDB_PROJECT = "aeras"
 CHECKPOINT_PREFIX = "aeras_v9_perpoll_params"
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT_DIR / "data"
-RAW_DIR = DATA_DIR / "raw"
-PROCESSED_DIR = DATA_DIR / "processed"
-SPLITS_DIR = DATA_DIR / "splits"
-CHECKPOINTS_DIR = ROOT_DIR / "checkpoints"
+# ── Environment detection ──────────────────────────────────────────
+# Kaggle mounts datasets at /kaggle/input/<dataset-slug>/
+# Output (checkpoints, logs) goes to /kaggle/working/
+_ON_KAGGLE = Path("/kaggle/input").exists()
+
+ROOT_DIR       = Path(__file__).resolve().parent.parent
+_KAGGLE_DATA   = Path("/kaggle/input/aeras-splits")
+
+DATA_DIR       = _KAGGLE_DATA       if _ON_KAGGLE else ROOT_DIR / "data"
+RAW_DIR        = DATA_DIR / "raw"
+PROCESSED_DIR  = _KAGGLE_DATA / "processed"  if _ON_KAGGLE else DATA_DIR / "processed"
+SPLITS_DIR     = _KAGGLE_DATA / "splits"      if _ON_KAGGLE else DATA_DIR / "splits"
+CHECKPOINTS_DIR = Path("/kaggle/working/checkpoints") if _ON_KAGGLE else ROOT_DIR / "checkpoints"
 
 
 for d in [RAW_DIR / "cpcb", RAW_DIR / "era5", RAW_DIR / "edgar",

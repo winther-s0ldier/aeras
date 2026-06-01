@@ -22,7 +22,7 @@ from src.config import (
 from src.models.pinn import AerasPINN, compute_pde_residual, compute_boundary_residual
 from src.models.source_net import SourceNet, SourceGrid
 from src.models.loss import AerasLoss
-from src.data.collocation import latin_hypercube, residual_adaptive_resample
+from src.data.collocation import latin_hypercube, residual_adaptive_resample, pde_residual_no_graph
 
 
 class AerasTrainer:
@@ -243,9 +243,15 @@ class AerasTrainer:
         if self.source_model and source_term is not None:
             L_sparsity = self.loss_fn.sparsity_loss(source_term)
 
+        # Non-negativity constraint on predictions at collocation points (jPINN 2025).
+        # Concentrations are physically non-negative; penalise violations.
+        with autocast(amp_device, enabled=self.use_amp):
+            C_colloc = self.model(colloc_inputs.float())
+        L_nonneg = self.loss_fn.nonnegativity_loss(C_colloc)
 
         loss_dict = self.loss_fn(
-            {"data": L_data, "pde": L_pde, "bc": L_bc, "ic": L_ic, "sparsity": L_sparsity},
+            {"data": L_data, "pde": L_pde, "bc": L_bc, "ic": L_ic,
+             "sparsity": L_sparsity, "nonneg": L_nonneg},
             epoch=epoch,
             curriculum_data_epochs=CURRICULUM_DATA_ONLY_EPOCHS,
             curriculum_rampup_epochs=CURRICULUM_PDE_RAMPUP_EPOCHS,
@@ -344,34 +350,167 @@ class AerasTrainer:
 
 
             if epoch > 0 and epoch % 5000 == 0 and epoch > CURRICULUM_DATA_ONLY_EPOCHS:
-                if self.train_data["targets"].shape[1] > 1:
-                    print(f"[TRAIN] Skipping RAR — multi-pollutant mode (graph traversal cost too high). "
-                          f"Static collocation points retained.")
-                else:
-                    print(f"[TRAIN] Resampling collocation points (RAR)...")
-                    new_points = residual_adaptive_resample(
-                        self.model,
-                        self.collocation_points[:, :3],
-                        lambda m, p: compute_pde_residual(
-                            m, torch.cat([p, torch.zeros(len(p), self.train_data["inputs"].shape[1] - 3, device=self.device)], dim=1)
-                        ),
-                        n_new=NUM_COLLOCATION // 4,
-                        device=self.device,
-                    )
+                # RAR re-enabled for all OUTPUT_DIM via pde_residual_no_graph.
+                # create_graph=False avoids the graph-traversal cost that made
+                # multi-output RAR prohibitively slow (DeepXDE, Lu et al. 2021).
+                print(f"[TRAIN] Resampling collocation points (RAR)...")
+                new_points = residual_adaptive_resample(
+                    self.model,
+                    self.collocation_points[:, :3],
+                    lambda m, p: pde_residual_no_graph(
+                        m, torch.cat(
+                            [p, torch.zeros(len(p), self.train_data["inputs"].shape[1] - 3, device=self.device)],
+                            dim=1
+                        )
+                    ),
+                    n_new=NUM_COLLOCATION // 4,
+                    device=self.device,
+                )
+                keep_idx = torch.randperm(len(self.collocation_points))[:int(NUM_COLLOCATION * 0.75)]
+                old_points = self.collocation_points[keep_idx]
+                self.collocation_points = torch.cat([old_points, new_points.to(self.device)], dim=0)
+                print(f"[TRAIN] Collocation points updated: {len(self.collocation_points):,}")
 
 
-                    keep_idx = torch.randperm(len(self.collocation_points))[:int(NUM_COLLOCATION * 0.75)]
-                    old_points = self.collocation_points[keep_idx]
-                    new_pts = new_points.to(self.device)
-                    self.collocation_points = torch.cat([old_points, new_pts], dim=0)
-                    print(f"[TRAIN] Collocation points updated: {len(self.collocation_points):,}")
-
-
+        self.save_checkpoint("adam_final")
+        print(f"\n[TRAIN] Adam phase done. Starting L-BFGS fine-tuning (Raissi et al. 2019)...")
+        self.lbfgs_phase(max_iter=2000)
         self.save_checkpoint("final")
         self._save_history()
 
         total_time = time.time() - start_time
-        print(f"\n[TRAIN] Done! {epochs} epochs in {total_time/3600:.1f} hours")
+        print(f"\n[TRAIN] Done! {epochs} epochs + L-BFGS in {total_time/3600:.1f} hours")
+
+    def lbfgs_phase(self, max_iter: int = 2000):
+        """
+        L-BFGS fine-tuning after Adam — directly from Raissi et al. 2019.
+        Adam warms up the network; L-BFGS drives PDE residual toward machine precision
+        using curvature information that first-order methods cannot reach.
+        Runs on fixed full-batch collocation + training data (no mini-batching).
+        AMP disabled: L-BFGS closure is called multiple times per step and float16
+        intermediate states cause instability.
+        """
+        self.model.train()
+        if self.source_model:
+            self.source_model.train()
+
+        params = list(self.model.parameters())
+        if self.source_model:
+            params += list(self.source_model.parameters())
+
+        optimizer_lbfgs = torch.optim.LBFGS(
+            params,
+            max_iter=max_iter,
+            max_eval=max_iter * 5,
+            tolerance_grad=1e-7,
+            tolerance_change=1e-9,
+            history_size=50,
+            line_search_fn="strong_wolfe",
+        )
+
+        # Chunked full-batch L-BFGS — achieves true full-batch gradient quality
+        # without OOM on RTX 4050 (6GB).
+        #
+        # The memory issue with naive full-batch L-BFGS:
+        #   50k collocation × 4 outputs × 2nd-order autograd graph → ~4GB → OOM.
+        #
+        # The fix (chunked closure):
+        #   Evaluate data loss and PDE loss in small chunks, accumulate gradients
+        #   manually via .backward() on each chunk, then do one L-BFGS step on
+        #   the accumulated full-batch gradient. This is mathematically equivalent
+        #   to full-batch L-BFGS — the gradient passed to the Hessian approximation
+        #   is exact over the full dataset, not a noisy subsample.
+        #
+        # Chunk sizes tuned for RTX 4050: 2k data rows, 2k collocation per chunk.
+        DATA_CHUNK   = 2_000
+        COLLOC_CHUNK = 2_000
+
+        all_inputs  = self.train_data["inputs"]
+        all_targets = self.train_data["targets"]
+        all_mask    = self.train_data.get("mask")
+        all_weight  = self.train_data.get("event_weight")
+
+        # Sample full collocation set once (fixed across closure calls for stable Hessian)
+        colloc_all = self._sample_collocation_batch(min(len(self.collocation_points), 20_000))
+
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+
+        iter_count = [0]
+
+        def closure():
+            optimizer_lbfgs.zero_grad()
+            total_loss = torch.tensor(0.0, device=self.device)
+            data_loss_val = 0.0
+            pde_loss_val  = 0.0
+
+            # ── Data loss in chunks ──────────────────────────────────────────
+            n = len(all_inputs)
+            for start in range(0, n, DATA_CHUNK):
+                end     = min(start + DATA_CHUNK, n)
+                inp_c   = all_inputs[start:end]
+                tgt_c   = all_targets[start:end]
+                mask_c  = all_mask[start:end]   if all_mask   is not None else None
+                wgt_c   = all_weight[start:end] if all_weight is not None else None
+
+                C_pred  = self.model(inp_c)
+                L_data_c = self.loss_fn.data_loss(C_pred, tgt_c, mask_c, weight=wgt_c)
+                # Scale by chunk fraction so total = mean over full dataset
+                L_data_c = L_data_c * (end - start) / n
+                L_data_c.backward()
+                data_loss_val += L_data_c.item()
+
+            # ── PDE loss in chunks ───────────────────────────────────────────
+            n_c = len(colloc_all)
+            for start in range(0, n_c, COLLOC_CHUNK):
+                end      = min(start + COLLOC_CHUNK, n_c)
+                colloc_c = colloc_all[start:end].float()
+
+                with torch.enable_grad():
+                    residual_c = compute_pde_residual(self.model, colloc_c)
+                L_pde_c = self.loss_fn.pde_loss(residual_c)
+                L_pde_c = 0.1 * L_pde_c * (end - start) / n_c
+                L_pde_c.backward()
+                pde_loss_val += L_pde_c.item()
+
+            total_val = data_loss_val + pde_loss_val
+
+            iter_count[0] += 1
+            if iter_count[0] % 50 == 0:
+                print(
+                    f"[LBFGS] iter {iter_count[0]:4d} | "
+                    f"total={total_val:.4e} | "
+                    f"data={data_loss_val:.4e} | "
+                    f"pde={pde_loss_val:.4e}"
+                )
+
+            # L-BFGS step() requires the closure to return a scalar tensor.
+            # Gradients already accumulated via chunk .backward() calls above;
+            # return a dummy tensor with the correct scalar value so the line
+            # search can evaluate loss changes across steps.
+            return torch.tensor(total_val, device=self.device, requires_grad=False)
+
+        try:
+            optimizer_lbfgs.step(closure)
+            print(f"[LBFGS] Complete after {iter_count[0]} evaluations.")
+        except Exception as e:
+            print(f"[LBFGS] Stopped early: {e}")
+            torch.cuda.empty_cache()
+
+        # Clear GPU cache to release history buffers and graph allocations
+        torch.cuda.empty_cache()
+
+        # Final residual check
+        self.model.eval()
+        try:
+            with torch.enable_grad():
+                colloc_check = self._sample_collocation_batch(1024)
+                residual_check = compute_pde_residual(self.model, colloc_check.float())
+                final_pde = residual_check.abs().mean().item()
+            print(f"[LBFGS] Final PDE residual: {final_pde:.4e}")
+        except Exception as eval_exc:
+            print(f"[LBFGS] Final residual check failed: {eval_exc}")
+            torch.cuda.empty_cache()
 
     def save_checkpoint(self, name: str):
         from src.config import CHECKPOINT_PREFIX

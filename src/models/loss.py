@@ -50,13 +50,14 @@ class AerasLoss(nn.Module):
         w_bc: float = W_BC,
         w_ic: float = W_IC,
         w_sparsity: float = W_SOURCE_SPARSITY,
+        w_nonneg: float = 0.1,   # non-negativity constraint weight (jPINN 2025)
         adaptive: bool = True,
     ):
         super().__init__()
-        self.base_weights = torch.tensor([w_data, w_pde, w_bc, w_ic, w_sparsity])
+        self.base_weights = torch.tensor([w_data, w_pde, w_bc, w_ic, w_sparsity, w_nonneg])
         self.adaptive = adaptive
         if adaptive:
-            self.adaptive_weights = AdaptiveLossWeights(n_losses=5)
+            self.adaptive_weights = AdaptiveLossWeights(n_losses=6)
 
     def data_loss(
         self,
@@ -102,6 +103,15 @@ class AerasLoss(nn.Module):
     def sparsity_loss(self, source_output: torch.Tensor) -> torch.Tensor:
         return source_output.abs().mean()
 
+    def nonnegativity_loss(self, pred: torch.Tensor) -> torch.Tensor:
+        """
+        Penalise negative concentration predictions (jPINN, 2025).
+        Physical constraint: all pollutant concentrations >= 0.
+        Uses ReLU so only negative predictions incur a penalty; positive
+        predictions contribute zero gradient — no interference with data loss.
+        """
+        return torch.nn.functional.relu(-pred).mean()
+
     def forward(
         self,
         losses_dict: Dict[str, torch.Tensor],
@@ -109,13 +119,14 @@ class AerasLoss(nn.Module):
         curriculum_data_epochs: int = 5000,
         curriculum_rampup_epochs: int = 10000,
     ) -> Dict[str, torch.Tensor]:
-        L_data = losses_dict.get("data", torch.tensor(0.0))
-        L_pde = losses_dict.get("pde", torch.tensor(0.0))
-        L_bc = losses_dict.get("bc", torch.tensor(0.0))
-        L_ic = losses_dict.get("ic", torch.tensor(0.0))
+        L_data     = losses_dict.get("data",     torch.tensor(0.0))
+        L_pde      = losses_dict.get("pde",      torch.tensor(0.0))
+        L_bc       = losses_dict.get("bc",       torch.tensor(0.0))
+        L_ic       = losses_dict.get("ic",       torch.tensor(0.0))
         L_sparsity = losses_dict.get("sparsity", torch.tensor(0.0))
+        L_nonneg   = losses_dict.get("nonneg",   torch.tensor(0.0))
 
-        raw_losses = torch.stack([L_data, L_pde, L_bc, L_ic, L_sparsity])
+        raw_losses = torch.stack([L_data, L_pde, L_bc, L_ic, L_sparsity, L_nonneg])
 
 
         if epoch < curriculum_data_epochs:
@@ -146,6 +157,7 @@ class AerasLoss(nn.Module):
             "bc": L_bc.item(),
             "ic": L_ic.item(),
             "sparsity": L_sparsity.item(),
+            "nonneg": L_nonneg.item(),
             "pde_scale": pde_scale,
             "weights": weights.detach().cpu().tolist(),
         }

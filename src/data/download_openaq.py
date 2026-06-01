@@ -133,9 +133,10 @@ def discover_locations(session: requests.Session) -> list:
                 "sensors":   sensors,
             })
 
-        meta  = data.get("meta", {})
-        found = int(meta.get("found", 0))
-        if not results or page * PAGE_SIZE >= found:
+        # OpenAQ v3 returns found=">1000" (string) when count exceeds PAGE_SIZE,
+        # so int() parsing is unreliable. Use standard REST pagination instead:
+        # stop when the page is not full (last page has fewer than PAGE_SIZE items).
+        if not results or len(results) < PAGE_SIZE:
             break
         page += 1
 
@@ -189,9 +190,8 @@ def _download_sensor_month(
             if dt is not None and val is not None:
                 rows.append({"timestamp_utc": dt, "value": float(val)})
 
-        meta  = data.get("meta", {})
-        found = int(meta.get("found", 0))
-        if not results or page * PAGE_SIZE >= found:
+        # Same fix: stop when page is not full rather than parsing found count.
+        if not results or len(results) < PAGE_SIZE:
             break
         page += 1
 
