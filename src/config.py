@@ -23,8 +23,15 @@ SPLITS_DIR     = _KAGGLE_DATA / "splits"      if _ON_KAGGLE else DATA_DIR / "spl
 CHECKPOINTS_DIR = Path("/kaggle/working/checkpoints") if _ON_KAGGLE else ROOT_DIR / "checkpoints"
 
 
-for d in [RAW_DIR / "cpcb", RAW_DIR / "era5", RAW_DIR / "edgar",
-          PROCESSED_DIR, SPLITS_DIR, CHECKPOINTS_DIR]:
+# Only create directories we can actually write to.
+# On Kaggle, /kaggle/input/ is read-only — skip raw/processed/splits dirs there.
+_dirs_to_create = [CHECKPOINTS_DIR]
+if not _ON_KAGGLE:
+    _dirs_to_create += [
+        RAW_DIR / "cpcb", RAW_DIR / "era5", RAW_DIR / "edgar",
+        PROCESSED_DIR, SPLITS_DIR,
+    ]
+for d in _dirs_to_create:
     d.mkdir(parents=True, exist_ok=True)
 
 

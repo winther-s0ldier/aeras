@@ -63,8 +63,10 @@ def cmd_train(inverse: bool = False, resume: Optional[str] = None):
             event_w.loc[df["is_holiday"].astype(bool)] *= 3.0
         if "timestamp" in df.columns:
             event_w.loc[df["timestamp"].dt.month.isin([12, 1])] *= 2.0
-        if "pm25" in df.columns:
-            event_w.loc[df["pm25"] > 200] *= 2.0
+        if "pm25_norm" in df.columns:
+            # denormalize threshold: 200 ug/m3. norm_params loaded separately if needed;
+            # 200/500 = 0.4 as approximate normalised threshold
+            event_w.loc[df["pm25_norm"] > 0.4] *= 2.0
         event_weight = torch.tensor(event_w.values, dtype=torch.float32).unsqueeze(1)
 
         result = {"inputs": inputs, "targets": targets, "mask": mask, "event_weight": event_weight}
