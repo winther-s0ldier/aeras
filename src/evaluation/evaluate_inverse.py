@@ -13,11 +13,17 @@ from src.evaluation.metrics import source_location_error, source_magnitude_error
 
 
 def load_edgar_baseline(resolution: int = 50) -> np.ndarray:
-    edgar_dir = RAW_DIR / "edgar"
+    edgar_file_raw = RAW_DIR / "edgar" / "edgar_delhi_pm25.npy"
+    edgar_file_ckpt = CHECKPOINTS_DIR / "edgar_delhi_pm25.npy"
 
+    if edgar_file_raw.exists():
+        edgar_file = edgar_file_raw
+    elif edgar_file_ckpt.exists():
+        edgar_file = edgar_file_ckpt
+    else:
+        edgar_file = None
 
-    edgar_file = edgar_dir / "edgar_delhi_pm25.npy"
-    if edgar_file.exists():
+    if edgar_file is not None:
         edgar = np.load(edgar_file)
 
         from scipy.ndimage import zoom

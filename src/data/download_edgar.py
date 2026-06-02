@@ -11,14 +11,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.config import RAW_DIR
+from src.config import RAW_DIR, CHECKPOINTS_DIR
 
 EDGAR_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/EDGAR/datasets/v61_AP/PM2.5/TOTALS/netcdf/v6.1_AP_PM2.5_2018_TOTALS_nc.zip"
 
 def main():
-    edgar_dir = RAW_DIR / "edgar"
-    edgar_dir.mkdir(parents=True, exist_ok=True)
-    out_file = edgar_dir / "edgar_delhi_pm25.npy"
+    try:
+        edgar_dir = RAW_DIR / "edgar"
+        edgar_dir.mkdir(parents=True, exist_ok=True)
+        out_file = edgar_dir / "edgar_delhi_pm25.npy"
+    except OSError:
+        out_file = CHECKPOINTS_DIR / "edgar_delhi_pm25.npy"
     
     if out_file.exists():
         print(f"[EDGAR] Baseline already exists at {out_file}")
