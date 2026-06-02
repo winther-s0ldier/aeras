@@ -265,6 +265,12 @@ class AerasTrainer:
             curriculum_rampup_epochs=CURRICULUM_PDE_RAMPUP_EPOCHS,
         )
 
+        # NaN guard — fail fast rather than waste a 6-hour Kaggle run
+        if torch.isnan(loss_dict["total"]):
+            raise RuntimeError(
+                f"NaN loss at epoch {epoch}. Likely cause: photolysis amplitude too high. "
+                f"Stop, lower LOG_J_AMP_INIT to -2.0, restart."
+            )
 
         if self.use_amp:
             self.scaler.scale(loss_dict["total"]).backward()

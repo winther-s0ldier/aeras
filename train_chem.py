@@ -32,8 +32,25 @@ cfg.LBFGS_MAX_ITER    = 1_000
 cfg.LBFGS_DATA_CHUNK  = 20_000
 cfg.LBFGS_COLLOC_CHUNK = 15_000
 
-from src.config import CHECKPOINTS_DIR
+# Verify INPUT_DIM propagates BEFORE importing trainer/model
 from src.training.trainer import AerasTrainer
+from src.models.pinn import AerasPINN
+from src.models.chemistry import ChemistryModule
+from src.config import POLLUTANTS, CHECKPOINTS_DIR
+
+# Assertion: AerasPINN must be built with input_dim=8
+_probe = AerasPINN()
+assert _probe.fourier.B.shape[0] == 8, (
+    f"AerasPINN built with input_dim={_probe.fourier.B.shape[0]}, expected 8. "
+    f"cfg.INPUT_DIM = {cfg.INPUT_DIM} must be set BEFORE importing AerasTrainer."
+)
+del _probe
+
+# Assertion: channel order
+assert POLLUTANTS == ["PM2.5", "NO2", "O3", "SO2"], (
+    f"Channel order changed. Chemistry assumes 0=PM2.5, 1=NO2, 2=O3. "
+    f"Got: {POLLUTANTS}"
+)
 
 SPLITS_DIR = Path("/kaggle/input/datasets/rudrakumar21/aeras-splits")
 
@@ -149,23 +166,22 @@ def main():
     print("\n[CHEM] Loading training data...")
     train_df = pd.read_parquet(SPLITS_DIR / "train.parquet")
     
-    # Ensure UTC interpretation. CPCB data may be naive (no tz attached).
-    # If naive, assume UTC (ERA5 standard) — chemistry module will apply IST offset internally.
+    # Timezone handling: ensure UTC interpretation.
+    # CPCB/merged data may be naive (no tz). Treat naive as UTC per ERA5 convention.
     ts_col = train_df["timestamp"]
     if ts_col.dt.tz is None:
-        ts_col = ts_col.dt.tz_localize("UTC")
+        ts_col_utc = ts_col.dt.tz_localize("UTC")
     else:
-        ts_col = ts_col.dt.tz_convert("UTC")
+        ts_col_utc = ts_col.dt.tz_convert("UTC")
 
-    T_MIN_UNIX = ts_col.min().timestamp()
-    T_MAX_UNIX = ts_col.max().timestamp()
+    T_MIN_UNIX = ts_col_utc.min().timestamp()
+    T_MAX_UNIX = ts_col_utc.max().timestamp()
     T_RANGE_SEC = T_MAX_UNIX - T_MIN_UNIX
 
-    print(f"[CHEM] T_MIN_UNIX = {T_MIN_UNIX:.1f} ({ts_col.min()})")
-    print(f"[CHEM] T_RANGE_SEC = {T_RANGE_SEC:.1f} ({T_RANGE_SEC / 86400:.1f} days)")
+    print(f"[CHEM] T_MIN_UNIX  = {T_MIN_UNIX:.1f}  ({ts_col_utc.min()})")
+    print(f"[CHEM] T_RANGE_SEC = {T_RANGE_SEC:.1f}  ({T_RANGE_SEC / 86400:.1f} days)")
 
     # Instantiate chemistry module:
-    from src.models.chemistry import ChemistryModule
     chem = ChemistryModule(
         t_min_unix=T_MIN_UNIX,
         t_range_sec=T_RANGE_SEC,
@@ -227,6 +243,7 @@ def main():
             all_results[split] = r
 
     out_path = CHECKPOINTS_DIR / "chem_results.json"
+    assert "da_results" not in str(out_path), "Output filename still references 'da_results'"
     with open(out_path, "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\n[CHEM] Results saved → {out_path.name}")

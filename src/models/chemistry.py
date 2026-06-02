@@ -51,21 +51,19 @@ def diurnal_photolysis(
     # Seconds since t_min (positive, max ~1.5e8 for 5 years)
     secs_since_min = t_norm * t_range_sec
 
-    # Recover absolute time-of-day, using modulo to keep angles small.
-    # t_min_unix offset into its own day:
-    t_min_day_offset = t_min_unix % SEC_PER_DAY  # constant, 0–86400
-    # Absolute seconds-into-UTC-day:
+    # t_min_unix offset into its own day (constant Python float)
+    t_min_day_offset = t_min_unix % SEC_PER_DAY
+    # Absolute seconds-into-UTC-day (kept in [0, 86400))
     secs_utc_day = torch.remainder(secs_since_min + t_min_day_offset, SEC_PER_DAY)
-    # Apply timezone offset for local solar time:
+    # Apply timezone offset for local solar time
     secs_local_day = torch.remainder(
         secs_utc_day + tz_offset_hours * 3600.0, SEC_PER_DAY
     )
 
     # Hour angle: peaks at zero at local solar noon (12:00)
-    # h_angle = (2π · sec_local / 86400) - π
     h_angle = 2.0 * math.pi * secs_local_day / SEC_PER_DAY - math.pi
 
-    # Day-of-year (fractional). Use modulo on accumulated seconds to keep precision.
+    # Day-of-year (fractional). Modulo on accumulated seconds keeps precision.
     t_min_year_offset = t_min_unix % SEC_PER_YEAR
     secs_into_year = torch.remainder(secs_since_min + t_min_year_offset, SEC_PER_YEAR)
     day_of_year = secs_into_year / SEC_PER_DAY  # 0–365.25
@@ -88,7 +86,7 @@ class ChemistryModule(nn.Module):
     """
     Differentiable atmospheric chemistry for NO2-O3 coupling.
 
-    Holds two learnable scalars:
+    Two learnable scalars:
         log_J_amp        — amplitude of NO2 photolysis rate (normalized units)
         log_leighton_eps — Leighton ε regularizer (numerical stability)
     """
@@ -103,7 +101,6 @@ class ChemistryModule(nn.Module):
         log_leighton_eps_init: float = -3.0,
     ):
         super().__init__()
-        # Store as floats — NOT buffers, since they're constants for the model life.
         self.t_min_unix = float(t_min_unix)
         self.t_range_sec = float(t_range_sec)
         self.lat_deg = float(lat_deg)
@@ -121,7 +118,7 @@ class ChemistryModule(nn.Module):
         return torch.exp(self.log_leighton_eps)
 
     def photolysis(self, t_norm: torch.Tensor) -> torch.Tensor:
-        """J(t) for NO2 photolysis. Returns same shape as t_norm."""
+        """J(t) for NO2 photolysis. Same shape as t_norm."""
         diurnal = diurnal_photolysis(
             t_norm, self.t_min_unix, self.t_range_sec,
             self.lat_deg, self.tz_offset_hours,
@@ -132,10 +129,10 @@ class ChemistryModule(nn.Module):
         self, t_norm: torch.Tensor, C_NO2: torch.Tensor, C_O3: torch.Tensor
     ):
         """
-        Compute chemistry source/sink terms for NO2 and O3 PDEs.
+        Compute chemistry source/sink for NO2 and O3 PDEs.
 
-        Both inputs are clamped to >= 0 to avoid unphysical negative concentrations
-        during early training (network output is unconstrained).
+        Both concentrations are clamped to >= 0 because the network output
+        is unconstrained and can be negative early in training.
         """
         J = self.photolysis(t_norm)
         eps = self.leighton_eps
@@ -143,7 +140,7 @@ class ChemistryModule(nn.Module):
         C_NO2_safe = torch.clamp(C_NO2, min=0.0)
         C_O3_safe = torch.clamp(C_O3, min=0.0)
 
-        # Leighton ratio
+        # Leighton ratio: R ≈ 1 when [O3] >> ε, R ≈ 0 when [O3] near zero
         R = C_O3_safe / (C_O3_safe + eps)
 
         # Net chemistry (deviation from steady state)
