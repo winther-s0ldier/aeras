@@ -25,7 +25,7 @@ import src.config as cfg
 cfg.INPUT_DIM = 8
 cfg.CHECKPOINT_PREFIX = "aeras_v15_chem"
 cfg.USE_CHEMISTRY = True
-cfg.BATCH_SIZE        = 16384
+cfg.BATCH_SIZE        = 4096
 cfg.NUM_COLLOCATION   = 200_000
 cfg.CHECKPOINT_EVERY  = 2_500
 cfg.LBFGS_MAX_ITER    = 1_000
