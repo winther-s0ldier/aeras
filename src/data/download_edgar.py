@@ -55,11 +55,12 @@ def main():
             
             ds = xr.open_dataset(nc_path)
             
+            # Full Delhi NCR bounding box — matches DELHI_LAT_RANGE / DELHI_LON_RANGE in config
             lats = ds.lat.values
             if lats[0] > lats[-1]:
-                ds_delhi = ds.sel(lat=slice(28.9, 28.2), lon=slice(76.8, 77.4))
+                ds_delhi = ds.sel(lat=slice(29.0, 27.5), lon=slice(76.5, 77.8))
             else:
-                ds_delhi = ds.sel(lat=slice(28.2, 28.9), lon=slice(76.8, 77.4))
+                ds_delhi = ds.sel(lat=slice(27.5, 29.0), lon=slice(76.5, 77.8))
                 
             var_name = [v for v in ds.data_vars if 'emi' in v.lower()][0]
             delhi_grid = ds_delhi[var_name].values.squeeze()
