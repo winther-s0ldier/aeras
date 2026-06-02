@@ -142,3 +142,10 @@ CURRICULUM_PDE_RAMPUP_EPOCHS = 10_000
 import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 USE_AMP = True
+
+# -- Chemistry (Phase 1: NO2/O3 photochemistry coupling) ------------------
+DELHI_LATITUDE = 28.6
+IST_OFFSET_HOURS = 5.5
+USE_CHEMISTRY = False  # default off; train_chem.py overrides to True
+LOG_J_AMP_INIT = -1.0
+LOG_LEIGHTON_EPS_INIT = -3.0

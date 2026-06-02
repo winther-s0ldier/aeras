@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Optional
+from src.models.chemistry import ChemistryModule
 
 import sys
 from pathlib import Path
@@ -99,12 +100,23 @@ def compute_pde_residual(
     model: AerasPINN,
     inputs: torch.Tensor,
     source_term: torch.Tensor = None,
+    chemistry: Optional["ChemistryModule"] = None,
 ) -> torch.Tensor:
 
     inputs = inputs.requires_grad_(True)
     C = model(inputs)
     u_wind = inputs[:, 3:4]
     v_wind = inputs[:, 4:5]
+    t_norm = inputs[:, 2:3]
+
+    # Chemistry terms (computed once, applied per channel below)
+    chem_NO2 = None
+    chem_O3 = None
+    if chemistry is not None and C.shape[1] >= 3:
+        # Channel order: 0=PM2.5, 1=NO2, 2=O3, 3=SO2 (matches POLLUTANTS in config)
+        chem_NO2, chem_O3 = chemistry.chemistry_terms(
+            t_norm, C[:, 1:2], C[:, 2:3]
+        )
 
     residuals = []
     for i in range(C.shape[1]):
@@ -139,7 +151,16 @@ def compute_pde_residual(
         S_i = source_term[:, i:i+1] if source_term is not None else 0.0
         deposition_i = model.lambda_dep[i] * Ci
 
-        residual_i = dCi_dt + advection_i - diffusion_i - S_i + deposition_i
+        # Chemistry contribution (only for NO2 channel 1 and O3 channel 2)
+        chem_i = 0.0
+        if chem_NO2 is not None and i == 1:
+            chem_i = chem_NO2
+        elif chem_O3 is not None and i == 2:
+            chem_i = chem_O3
+
+        residual_i = (
+            dCi_dt + advection_i - diffusion_i - S_i + deposition_i - chem_i
+        )
         residuals.append(residual_i)
 
     return torch.cat(residuals, dim=1)

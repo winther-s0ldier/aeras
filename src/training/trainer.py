@@ -34,9 +34,13 @@ class AerasTrainer:
         inverse_mode: bool = False,
         source_type: str = "net",
         use_wandb: bool = True,
+        chemistry_module=None,
     ):
         self.device = DEVICE
         self.inverse_mode = inverse_mode
+        self.chemistry_module = (
+            chemistry_module.to(self.device) if chemistry_module is not None else None
+        )
 
 
         self.train_data = {k: v.to(self.device) for k, v in train_data.items()}
@@ -58,6 +62,8 @@ class AerasTrainer:
         params = list(self.model.parameters())
         if self.source_model is not None:
             params += list(self.source_model.parameters())
+        if self.chemistry_module is not None:
+            params += list(self.chemistry_module.parameters())
         self.optimizer = Adam(params, lr=LEARNING_RATE)
 
 
@@ -226,7 +232,8 @@ class AerasTrainer:
 
 
             residual = compute_pde_residual(
-                self.model, colloc_inputs.float(), source_term
+                self.model, colloc_inputs.float(), source_term,
+                chemistry=self.chemistry_module,
             )
             L_pde = self.loss_fn.pde_loss(residual)
 
@@ -286,7 +293,10 @@ class AerasTrainer:
 
         with torch.enable_grad():
             colloc = self._sample_collocation_batch(1024)
-            residual = compute_pde_residual(self.model, colloc.float())
+            residual = compute_pde_residual(
+                self.model, colloc.float(),
+                chemistry=self.chemistry_module,
+            )
             physics_residual = residual.abs().mean().item()
 
         return {
@@ -405,6 +415,8 @@ class AerasTrainer:
         params = list(self.model.parameters())
         if self.source_model:
             params += list(self.source_model.parameters())
+        if self.chemistry_module is not None:
+            params += list(self.chemistry_module.parameters())
 
         optimizer_lbfgs = torch.optim.LBFGS(
             params,
@@ -465,7 +477,10 @@ class AerasTrainer:
                 colloc_c = colloc_all[start:end].float()
 
                 with torch.enable_grad():
-                    residual_c = compute_pde_residual(self.model, colloc_c)
+                    residual_c = compute_pde_residual(
+                        self.model, colloc_c,
+                        chemistry=self.chemistry_module,
+                    )
                 L_pde_c = self.loss_fn.pde_loss(residual_c)
                 L_pde_c = 0.1 * L_pde_c * (end - start) / n_c
                 L_pde_c.backward()
@@ -503,7 +518,10 @@ class AerasTrainer:
         try:
             with torch.enable_grad():
                 colloc_check = self._sample_collocation_batch(1024)
-                residual_check = compute_pde_residual(self.model, colloc_check.float())
+                residual_check = compute_pde_residual(
+                    self.model, colloc_check.float(),
+                    chemistry=self.chemistry_module,
+                )
                 final_pde = residual_check.abs().mean().item()
             print(f"[LBFGS] Final PDE residual: {final_pde:.4e}")
         except Exception as eval_exc:
@@ -523,6 +541,8 @@ class AerasTrainer:
             state["source_model"] = self.source_model.state_dict()
         if self.scaler:
             state["scaler"] = self.scaler.state_dict()
+        if self.chemistry_module is not None:
+            state["chemistry"] = self.chemistry_module.state_dict()
 
         torch.save(state, path)
         print(f"[CKPT] Saved: {path}")
@@ -541,6 +561,8 @@ class AerasTrainer:
             self.source_model.load_state_dict(state["source_model"])
         if self.scaler and "scaler" in state:
             self.scaler.load_state_dict(state["scaler"])
+        if self.chemistry_module is not None and "chemistry" in state:
+            self.chemistry_module.load_state_dict(state["chemistry"])
 
         last_epoch = self.history["epoch"][-1] if self.history["epoch"] else 0
         print(f"[CKPT] Loaded: {path} (epoch {last_epoch})")
