@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import RAW_DIR, CHECKPOINTS_DIR
 
-EDGAR_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/EDGAR/datasets/v61_AP/PM2.5/TOTALS/netcdf/v6.1_AP_PM2.5_2018_TOTALS_nc.zip"
+EDGAR_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/EDGAR/datasets/v61_AP/PM2.5/TOTALS/EDGARv6.1_PM2.5_2018_TOTALS.0.1x0.1.zip"
 
 def main():
     try:
