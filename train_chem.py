@@ -23,7 +23,7 @@ import src.config as cfg
 
 # ── critical: set INPUT_DIM=8 BEFORE importing AerasPINN ─────────────────────
 cfg.INPUT_DIM = 8
-cfg.CHECKPOINT_PREFIX = "aeras_v14_chem"
+cfg.CHECKPOINT_PREFIX = "aeras_v15_chem"
 cfg.USE_CHEMISTRY = True
 cfg.BATCH_SIZE        = 4096
 cfg.NUM_COLLOCATION   = 200_000

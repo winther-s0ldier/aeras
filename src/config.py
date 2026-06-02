@@ -147,5 +147,6 @@ USE_AMP = True
 DELHI_LATITUDE = 28.6
 IST_OFFSET_HOURS = 5.5
 USE_CHEMISTRY = False  # default off; train_chem.py overrides to True
-LOG_J_AMP_INIT = -1.0
+LOG_J_AMP_INIT = -0.5
 LOG_LEIGHTON_EPS_INIT = -3.0
+
