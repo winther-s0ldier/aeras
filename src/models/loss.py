@@ -57,7 +57,7 @@ class AerasLoss(nn.Module):
         self.base_weights = torch.tensor([w_data, w_pde, w_bc, w_ic, w_sparsity, w_nonneg])
         self.adaptive = adaptive
         if adaptive:
-            self.adaptive_weights = AdaptiveLossWeights(n_losses=6)
+            self.adaptive_weights = AdaptiveLossWeights(n_losses=4)
 
     def data_loss(
         self,
@@ -144,8 +144,9 @@ class AerasLoss(nn.Module):
         weights[3] *= pde_scale
 
 
-        if self.adaptive and pde_scale > 0 and raw_losses.sum() > 0:
-            adaptive_w = self.adaptive_weights(raw_losses)
+        if self.adaptive and pde_scale > 0 and raw_losses[:4].sum() > 0:
+            adaptive_w_core = self.adaptive_weights(raw_losses[:4])
+            adaptive_w = torch.cat([adaptive_w_core, torch.ones(2, device=raw_losses.device)])
             weights = weights * adaptive_w
 
         total = (weights * raw_losses).sum()
