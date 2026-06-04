@@ -147,3 +147,89 @@ class ChemistryModule(nn.Module):
         net = J * C_NO2_safe * (1.0 - R)
 
         return -net, net  # (chem_NO2, chem_O3)
+
+
+class TitrationChemistryModule(nn.Module):
+    """
+    Two-regime NO2-O3 chemistry — fixes Leighton's nighttime blind spot.
+
+    Leighton failed because it only models daytime photolysis.
+    Diwali is nighttime: fireworks inject raw NO which titrates O3.
+    This module handles BOTH regimes via a solar-zenith gate:
+
+        Daytime  (cos_zen > 0): NO2 + hν → NO + O → O3  [photolysis]
+                                 NO2 decreases, O3 increases
+        Nighttime (cos_zen ≈ 0): NO + O3 → NO2 + O2     [NOx titration]
+                                 O3 decreases, NO2 increases
+                                 [NO] proxied by C_NO2 (NOx pool)
+
+    Sign convention (same as ChemistryModule):
+        return (chem_NO2, chem_O3)
+        In compute_pde_residual: residual -= chem_i
+        So chem_i > 0 → species source, chem_i < 0 → species sink.
+
+    Antisymmetry: chem_NO2 + chem_O3 = 0 at all times (mass-conserving).
+
+    Learnable params:
+        log_J_amp   : photolysis rate amplitude   (init exp(-0.5) ≈ 0.61)
+        log_k_tit   : titration rate constant     (init exp(-2.0) ≈ 0.14)
+    """
+
+    def __init__(
+        self,
+        t_min_unix: float,
+        t_range_sec: float,
+        lat_deg: float = DELHI_LATITUDE,
+        tz_offset_hours: float = IST_OFFSET_HOURS,
+        log_J_amp_init: float = -0.5,
+        log_k_tit_init: float = -2.0,
+    ):
+        super().__init__()
+        self.t_min_unix     = float(t_min_unix)
+        self.t_range_sec    = float(t_range_sec)
+        self.lat_deg        = float(lat_deg)
+        self.tz_offset_hours = float(tz_offset_hours)
+
+        self.log_J_amp  = nn.Parameter(torch.tensor(float(log_J_amp_init)))
+        self.log_k_tit  = nn.Parameter(torch.tensor(float(log_k_tit_init)))
+
+    @property
+    def J_amp(self) -> torch.Tensor:
+        return torch.exp(self.log_J_amp)
+
+    @property
+    def k_tit(self) -> torch.Tensor:
+        return torch.exp(self.log_k_tit)
+
+    def _cos_zenith(self, t_norm: torch.Tensor) -> torch.Tensor:
+        """Raw cos(solar zenith), clamped to [0, 1]. Zero at night."""
+        return diurnal_photolysis(
+            t_norm, self.t_min_unix, self.t_range_sec,
+            self.lat_deg, self.tz_offset_hours,
+        )
+
+    def chemistry_terms(
+        self, t_norm: torch.Tensor, C_NO2: torch.Tensor, C_O3: torch.Tensor
+    ):
+        cos_zen    = self._cos_zenith(t_norm)          # [0, ~1], zero at night
+        night_gate = 1.0 - cos_zen                     # [0, ~1], high at night
+
+        C_NO2_safe = torch.clamp(C_NO2, min=0.0)
+        C_O3_safe  = torch.clamp(C_O3,  min=0.0)
+
+        # Daytime: NO2 photolysis produces O3
+        # Rate proportional to J(t) and [NO2]
+        J           = self.J_amp * cos_zen
+        day_rate    = J * C_NO2_safe               # O3 production / NO2 loss rate
+
+        # Nighttime: NOx titration consumes O3, forms NO2
+        # Rate proportional to k_tit, [NO2] (proxy for NOx pool), [O3]
+        night_rate  = self.k_tit * C_NO2_safe * C_O3_safe * night_gate
+
+        # Net: antisymmetric — chem_NO2 + chem_O3 = 0 always
+        # O3: +day (produced daytime) - night (consumed nighttime)
+        # NO2: -day (consumed daytime) + night (produced nighttime)
+        chem_O3  =  day_rate - night_rate
+        chem_NO2 = -day_rate + night_rate
+
+        return chem_NO2, chem_O3   # same convention as ChemistryModule

@@ -243,17 +243,26 @@ Learned `J_amp` violently dropped from `0.606` down to `0.265`.
 
 ---
 
-## Pre-Registered Roadmap: v17 & v18
+## v17 — Multi-Pollutant DA vs Chemistry (The DA Rescue)
 
-**v17 Prediction (Currently Running):** 
-- We expect the `DA3_OFF` arm to successfully rescue NO2 and O3 (R² ~0.3-0.6) because the lag feature bypasses the broken PDE. 
-- We expect the `CHEMDA_ON` arm to add zero marginal value (or perform slightly worse), confirming that the textbook Leighton chemistry is structurally incapable of handling nighttime anomalies (the null-cycle breakdown). 
+**What.** Added `no2_lag1h` and `o3_lag1h` (INPUT_DIM=10). Ran two identical architectures side-by-side:
+1. `DA3_OFF`: Data assimilation (lag features) on PM2.5, NO2, O3, with physics enabled (transport-only).
+2. `CHEMDA_ON`: Same data assimilation, plus the Leighton photochemistry physics constraint for NO2/O3.
 
-**v18 Plan (Titration + Photolysis):**
-If `v17` confirms the prediction above, the final physics step before satellite integration will be `v18`. We will replace the broken Leighton chemistry with a 2-regime model:
-1. **Daytime:** Photolysis drives O3 up.
-2. **Nighttime:** Titration (NO + O3 → NO2) drives O3 down and NO2 up.
-This uses only 2 learnable scalars (`k_tit` and `J_amp`), making it highly data-efficient, and physically solves the exact mechanism that happens during the Diwali fireworks spike.
+**Why.** Test whether DA can rescue NO2/O3 where pure physics failed (v14/v15). If so, we test if the addition of photochemistry provides any *marginal* benefit on top of DA.
+
+**Results.** 
+| Pollutant | v14 (No DA) Diwali R² | v17 (DA3_OFF) Diwali R² | v17 (CHEMDA_ON) Diwali R² |
+|---|---|---|---|
+| PM2.5 | 0.752 | 0.709 | **0.737** |
+| NO2 | -0.167 | **0.501** | 0.489 |
+| O3 | -0.334 | **0.562** | 0.556 |
+
+**Verdict.** ✅ THE HOLY GRAIL. 
+1. **DA solves the problem:** Giving NO2 and O3 their own data assimilation anchors instantly rescued their R² from severely negative to **> +0.50** for both! 
+2. **Chemistry is redundant when DA is strong:** Adding Leighton chemistry back in on top of DA produced virtually identical performance (O3: 0.562 vs 0.556). DA anchors the state so tightly that the physics network doesn't *need* to close the complex NO2↔O3 reaction loops—it just advects the known recent states.
+
+**What next.** We have maximized the physics architecture (DA + Transport is the peak, photochemistry is redundant with DA). The absolute final frontier (v19) is integrating the `aer_ai_norm` Sentinel-5P satellite data (which we just merged!) to conquer the spatial generalization issue discovered in v12.
 
 ## Claims Register — what we can and cannot say
 
