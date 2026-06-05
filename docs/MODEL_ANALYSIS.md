@@ -282,7 +282,7 @@ Learned `J_amp` violently dropped from `0.606` down to `0.265`.
 1. **SO2 DA is a spectacular success:** Adding `so2_lag1h` instantly shot SO2 R² from ~0 up to **+0.734** on Diwali and **+0.534** on Winter. We have now proven that Data Assimilation works unconditionally across all 4 pollutants.
 2. **Pure DA remains king:** The custom titration chemistry model actively *hurt* the O3 and NO2 scores compared to the pure DA baseline (v17). This definitively proves the paper's core physics thesis: trying to force simplified chemical mechanisms is inferior to simply using Data Assimilation to anchor the reactive states.
 
-**What next.** We are completely done with the physics and chemistry architecture. The final capstone experiment is **v19 (Satellite-PINN)**, where we integrate the downloaded Sentinel-5P data (`aer_ai_norm`) to fix the spatial generalization issue.
+**What next.** Chemistry is done — all three approaches (Leighton, titration) systematically fail when DA lags are available. The clean next step is **v19**: remove the chemistry entirely, keep all four lags, and get the best honest unified model.
 
 ## Claims Register — what we can and cannot say
 

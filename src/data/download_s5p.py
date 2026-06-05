@@ -62,22 +62,32 @@ def download_s5p_data():
                 f"and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'productType' "
                 f"    and att/OData.CSC.StringAttribute/Value eq '{product_type}') "
                 f"and OData.CSC.Intersects(area=geography'SRID=4326;{WKT_POLYGON}') "
-                f"and ContentDate/Start ge {start_date} and ContentDate/Start lt {end_date}&$top=10"
+                f"and ContentDate/Start ge {start_date} and ContentDate/Start lt {end_date}&$top=100"
             )
 
             print(f"[S5P] Searching {year}-{month:02d}...")
-            resp = requests.get(query, timeout=30)
-            if resp.status_code == 200:
-                products = resp.json().get("value", [])
-                print(f"       Found {len(products)} products.")
-                for prod in products:
-                    out_path = s5p_dir / f"{prod['Name']}.nc"
-                    if out_path.exists():
-                        print(f"  [SKIP] {prod['Name']}")
+            import time
+            for attempt in range(3):
+                try:
+                    resp = requests.get(query, timeout=60)
+                    if resp.status_code == 200:
+                        products = resp.json().get("value", [])
+                        print(f"       Found {len(products)} products.")
+                        for prod in products:
+                            out_path = s5p_dir / f"{prod['Name']}.nc"
+                            if out_path.exists():
+                                print(f"  [SKIP] {prod['Name']}")
+                            else:
+                                all_products.append(prod)
+                        break
                     else:
-                        all_products.append(prod)
-            else:
-                print(f"[S5P] Search failed: {resp.status_code} {resp.text[:200]}")
+                        print(f"[S5P] Search failed: {resp.status_code} {resp.text[:200]}")
+                        break
+                except Exception as e:
+                    print(f"       [Retry {attempt+1}/3] Search failed due to network error: {e}")
+                    if attempt == 2:
+                        print(f"       [FATAL] Skipping {year}-{month:02d} after 3 attempts.")
+                    time.sleep(2)
 
     print(f"\n[S5P] {len(all_products)} new files to download.")
     if not all_products:
