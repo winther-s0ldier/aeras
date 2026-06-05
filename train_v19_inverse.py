@@ -157,7 +157,7 @@ def main():
         p.requires_grad = False
     print("[V19-INV] v19 forward model FROZEN.")
 
-    # ── fresh SourceNet ────────────────────────────────────────────────────────
+    # ── SourceNet ──────────────────────────────────────────────────────────────
     source_net = FixedSourceNet(hidden_dim=128, num_layers=5).to(device)
     n_params   = sum(p.numel() for p in source_net.parameters())
     print(f"[V19-INV] SourceNet params: {n_params:,}")
@@ -166,6 +166,29 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=5000, T_mult=2, eta_min=1e-6
     )
+
+    start_epoch = 1
+    best_loss = float("inf")
+    history   = []
+
+    # ── Auto-Resume Logic ──────────────────────────────────────────────────────
+    import glob
+    ckpt_files = glob.glob(str(CHECKPOINTS_DIR / f"{OUTPUT_PREFIX}_epoch*.pt"))
+    if ckpt_files:
+        def get_epoch(f):
+            try: return int(Path(f).stem.replace(f"{OUTPUT_PREFIX}_epoch", ""))
+            except: return -1
+        latest_ckpt = max(ckpt_files, key=get_epoch)
+        if Path(latest_ckpt).exists():
+            print(f"[V19-INV] Found existing checkpoint: {Path(latest_ckpt).name}")
+            ckpt = torch.load(latest_ckpt, map_location=device, weights_only=False)
+            source_net.load_state_dict(ckpt["source_model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            start_epoch = ckpt["epoch"] + 1
+            history = ckpt.get("history", [])
+            if history:
+                best_loss = min(h.get("pde_loss", float("inf")) for h in history)
+            print(f"[V19-INV] Resumed at epoch {start_epoch}. Best loss: {best_loss:.4e}")
 
     # ── collocation points: standard LHS + Diwali-dense ───────────────────────
     print(f"[V19-INV] Building {NUM_COLLOC:,} collocation points...")
@@ -182,15 +205,12 @@ def main():
     print(f"[V19-INV] Total collocation: {len(colloc):,} "
           f"(incl. {n_diwali:,} Diwali-dense)")
 
-    # ── training loop ──────────────────────────────────────────────────────────
     print(f"\n[V19-INV] Training SourceNet for {EPOCHS} epochs.")
     print("  Loss = PDE residual only. No sparsity. v19 forward frozen.\n")
 
-    best_loss = float("inf")
-    history   = []
-    t0        = time.time()
+    t0 = time.time()
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(start_epoch, EPOCHS + 1):
         source_net.train()
         optimizer.zero_grad()
 
