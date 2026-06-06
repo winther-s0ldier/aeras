@@ -492,36 +492,23 @@ def merge_and_update_splits(modis_df: pd.DataFrame, s5p_df: pd.DataFrame):
             test_df.to_parquet(SPLITS_DIR / "test.parquet", index=False)
             print(f"  Wrote test.parquet  ({test_mask.sum():,} rows)")
     else:
-        # Came from merged_hourly — use same split logic as preprocess.py
-        diwali_2018  = (df["timestamp"] >= "2018-11-04") & (df["timestamp"] <= "2018-11-11")
-        diwali_2019  = (df["timestamp"] >= "2019-10-24") & (df["timestamp"] <= "2019-10-31")
-        diwali_2020  = (df["timestamp"] >= "2020-11-14") & (df["timestamp"] <= "2020-11-21")
-        diwali_2021  = (df["timestamp"] >= "2021-11-04") & (df["timestamp"] <= "2021-11-11")
-        diwali_mask  = diwali_2018 | diwali_2019 | diwali_2020 | diwali_2021
+        # Came from merged_hourly.parquet — save the enriched version back,
+        # then run normalize_and_split so x_norm / pm25_norm / t_norm etc. are
+        # all regenerated correctly.  Without this, those columns would be absent
+        # and every training script would crash with KeyError: 'x_norm'.
+        print("[MERGE] Saving enriched merged_hourly.parquet...")
+        df.to_parquet(merged_path, index=False)
 
-        winter_2018_19 = (df["timestamp"] >= "2018-12-01") & (df["timestamp"] <= "2019-01-31")
-        winter_2019_20 = (df["timestamp"] >= "2019-12-01") & (df["timestamp"] <= "2020-01-31")
-        winter_mask    = winter_2018_19 | winter_2019_20
-
-        recent_pool = df["timestamp"].dt.year.isin([2019, 2020]) & ~winter_mask & ~diwali_mask
-        random_idx  = df[recent_pool].sample(frac=0.15, random_state=42).index
-        random_mask = df.index.isin(random_idx)
-
-        test_mask    = diwali_mask | winter_mask | random_mask
-        train_pool   = ~test_mask
-        val_idx      = df[train_pool].sample(frac=0.10, random_state=42).index
-        val_mask     = df.index.isin(val_idx)
-        train_mask   = ~test_mask & ~val_mask
-
-        df[train_mask].to_parquet(SPLITS_DIR / "train.parquet",        index=False)
-        df[val_mask  ].to_parquet(SPLITS_DIR / "val.parquet",          index=False)
-        df[test_mask ].to_parquet(SPLITS_DIR / "test.parquet",         index=False)
-        df[diwali_mask].to_parquet(SPLITS_DIR / "test_diwali.parquet", index=False)
-        df[winter_mask].to_parquet(SPLITS_DIR / "test_winter.parquet", index=False)
-        df[random_mask].to_parquet(SPLITS_DIR / "test_random.parquet", index=False)
-
-        print(f"  train: {train_mask.sum():,} | val: {val_mask.sum():,} | "
-              f"test: {test_mask.sum():,}")
+        print("[MERGE] Routing through normalize_and_split to rebuild all norm cols...")
+        from src.data.preprocess import normalize_and_split
+        from src.config import PROCESSED_DIR
+        station_coords_path = PROCESSED_DIR / "station_coords.csv"
+        if station_coords_path.exists():
+            import pandas as _pd
+            station_coords = _pd.read_csv(station_coords_path)
+        else:
+            station_coords = None
+        normalize_and_split(df, station_coords)
 
     # ── Step 5: Verify ────────────────────────────────────────────────────────
     print("\n[VERIFY] Checking train.parquet...")
