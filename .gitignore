@@ -4,7 +4,6 @@ data/splits/
 *.parquet
 *.nc
 *.npy
-*.csv
 
 checkpoints/
 *.pt

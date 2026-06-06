@@ -25,10 +25,29 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}  |  Kaggle: {ON_KAGGLE}")
 
 # ── Column layout ───────────────────────────────────────────────────────────
-BASE_COLS = ["x_norm","y_norm","t_norm","u_wind_norm","v_wind_norm",
-             "temp_norm","blh_norm",
-             "pm25_lag1h_norm","no2_lag1h_norm","o3_lag1h_norm","so2_lag1h_norm"]
 TARGET_COLS = ["pm25_norm","no2_norm","o3_norm","so2_norm"]
+
+def detect_lag_cols(df):
+    # Try multiple naming conventions used across versions
+    candidates = {
+        "pm25": ["pm25_lag1h_norm","pm25_lag_norm","pm25_lag1h","pm25_lag"],
+        "no2":  ["no2_lag1h_norm", "no2_lag_norm", "no2_lag1h", "no2_lag"],
+        "o3":   ["o3_lag1h_norm",  "o3_lag_norm",  "o3_lag1h",  "o3_lag"],
+        "so2":  ["so2_lag1h_norm", "so2_lag_norm", "so2_lag1h", "so2_lag"],
+    }
+    found = {}
+    for pol, opts in candidates.items():
+        for c in opts:
+            if c in df.columns:
+                found[pol] = c
+                break
+        if pol not in found:
+            raise ValueError(f"Cannot find lag column for {pol}. Available: {[c for c in df.columns if 'lag' in c.lower()]}")
+    return found
+
+BASE_COLS_FIXED = ["x_norm","y_norm","t_norm","u_wind_norm","v_wind_norm",
+                   "temp_norm","blh_norm"]
+# lag cols are detected at load time
 # Indices into final tensor:  0-10=base  11=aer_norm  12=aer_avail  13=mod_norm  14=mod_avail
 
 # ── Architecture ────────────────────────────────────────────────────────────
@@ -104,6 +123,13 @@ class DualSatPINN(nn.Module):
 def load_split_with_modis(split_name, modis_df, modis_mean, modis_std):
     df = pd.read_parquet(SPLITS_DIR / f"{split_name}.parquet")
 
+    # Auto-detect lag column names (varies across dataset versions)
+    lag_map = detect_lag_cols(df)
+    lag_cols = [lag_map["pm25"], lag_map["no2"], lag_map["o3"], lag_map["so2"]]
+    base_cols = BASE_COLS_FIXED + lag_cols
+    if split_name == "train":
+        print(f"  Lag cols detected: {lag_cols}")
+
     # Merge MODIS AOD
     df["_date"] = pd.to_datetime(df["timestamp"]).dt.date
     modis_day = modis_df.copy()
@@ -118,7 +144,7 @@ def load_split_with_modis(split_name, modis_df, modis_mean, modis_std):
         AER_MEAN_FILL = 0.427887
         df["aer_ai_available"] = (df["aer_ai_norm"] != AER_MEAN_FILL).astype(np.float32)
 
-    final_cols = BASE_COLS + ["aer_ai_norm","aer_ai_available","modis_aod_norm","modis_aod_available"]
+    final_cols = base_cols + ["aer_ai_norm","aer_ai_available","modis_aod_norm","modis_aod_available"]
     missing = [c for c in final_cols + TARGET_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing in {split_name}: {missing}")
