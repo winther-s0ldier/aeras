@@ -25,30 +25,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}  |  Kaggle: {ON_KAGGLE}")
 
 # ── Column layout ───────────────────────────────────────────────────────────
-TARGET_COLS = ["pm25_norm","no2_norm","o3_norm","so2_norm"]
-
-def detect_lag_cols(df):
-    # Try multiple naming conventions used across versions
-    candidates = {
-        "pm25": ["pm25_lag1h_norm","pm25_lag_norm","pm25_lag1h","pm25_lag"],
-        "no2":  ["no2_lag1h_norm", "no2_lag_norm", "no2_lag1h", "no2_lag"],
-        "o3":   ["o3_lag1h_norm",  "o3_lag_norm",  "o3_lag1h",  "o3_lag"],
-        "so2":  ["so2_lag1h_norm", "so2_lag_norm", "so2_lag1h", "so2_lag"],
-    }
-    found = {}
-    for pol, opts in candidates.items():
-        for c in opts:
-            if c in df.columns:
-                found[pol] = c
-                break
-        if pol not in found:
-            raise ValueError(f"Cannot find lag column for {pol}. Available: {[c for c in df.columns if 'lag' in c.lower()]}")
-    return found
-
+TARGET_COLS  = ["pm25_norm","no2_norm","o3_norm","so2_norm"]
 BASE_COLS_FIXED = ["x_norm","y_norm","t_norm","u_wind_norm","v_wind_norm",
                    "temp_norm","blh_norm"]
-# lag cols are detected at load time
-# Indices into final tensor:  0-10=base  11=aer_norm  12=aer_avail  13=mod_norm  14=mod_avail
+LAG_COLS_OUT = ["pm25_lag1h_norm","no2_lag1h_norm","o3_lag1h_norm","so2_lag1h_norm"]
+# Final base = BASE_COLS_FIXED(7) + LAG_COLS_OUT(4) = 11
+# Full tensor: 0-10=base  11=aer_norm  12=aer_avail  13=mod_norm  14=mod_avail
 
 # ── Architecture ────────────────────────────────────────────────────────────
 class FourierEmbedding(nn.Module):
@@ -123,14 +105,19 @@ class DualSatPINN(nn.Module):
 def load_split_with_modis(split_name, modis_df, modis_mean, modis_std):
     df = pd.read_parquet(SPLITS_DIR / f"{split_name}.parquet")
 
-    # Auto-detect lag column names (varies across dataset versions)
-    lag_map = detect_lag_cols(df)
-    lag_cols = [lag_map["pm25"], lag_map["no2"], lag_map["o3"], lag_map["so2"]]
-    base_cols = BASE_COLS_FIXED + lag_cols
-    if split_name == "train":
-        print(f"  Lag cols detected: {lag_cols}")
+    # Compute lag features on the fly (Kaggle splits don't have precomputed lags)
+    df = df.sort_values(["station","timestamp"]).reset_index(drop=True)
+    for pol in ["pm25","no2","o3","so2"]:
+        df[f"{pol}_lag1h_norm"] = (df.groupby("station")[f"{pol}_norm"]
+                                     .shift(1).fillna(0).astype(np.float32))
+    base_cols = BASE_COLS_FIXED + LAG_COLS_OUT
 
-    # Merge MODIS AOD
+    # Drop old zero-filled modis columns if present
+    for c in ["modis_aod","modis_aod_norm","modis_aod_available"]:
+        if c in df.columns:
+            df = df.drop(columns=[c])
+
+    # Merge fresh MODIS AOD
     df["_date"] = pd.to_datetime(df["timestamp"]).dt.date
     modis_day = modis_df.copy()
     modis_day["_date"] = pd.to_datetime(modis_day["date"]).dt.date
@@ -152,11 +139,6 @@ def load_split_with_modis(split_name, modis_df, modis_mean, modis_std):
     X = torch.tensor(df[final_cols].fillna(0).values, dtype=torch.float32)
     y = torch.tensor(df[TARGET_COLS].values, dtype=torch.float32)
     return X, y
-
-# Debug: print all columns in train split
-_df_debug = pd.read_parquet(SPLITS_DIR / "train.parquet")
-print("ALL COLUMNS:", sorted(_df_debug.columns.tolist()))
-del _df_debug
 
 print("Loading MODIS CSV...")
 modis_df  = pd.read_csv(MODIS_CSV)
