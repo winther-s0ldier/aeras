@@ -42,21 +42,22 @@ class FourierEmbedding(nn.Module):
         return torch.cat([torch.sin(p), torch.cos(p)], dim=-1)
 
 class AerasPINN(nn.Module):
+    # Attribute names match aeras_v19_da4_final.pt checkpoint exactly
     def __init__(self, in_dim=11, out_dim=4, hidden=256, n_layers=8, n_freq=128):
         super().__init__()
-        self.embed = FourierEmbedding(in_dim, n_freq)
+        self.fourier = FourierEmbedding(in_dim, n_freq)   # checkpoint: fourier.B
         dims = [n_freq*2] + [hidden]*n_layers + [out_dim]
         layers = []
         for i in range(len(dims)-1):
             layers.append(nn.Linear(dims[i], dims[i+1]))
             if i < len(dims)-2:
                 layers.append(nn.Tanh())
-        self.net = nn.Sequential(*layers)
-        self.log_Dx  = nn.Parameter(torch.full((out_dim,), -2.0))
-        self.log_Dy  = nn.Parameter(torch.full((out_dim,), -2.0))
-        self.log_lam = nn.Parameter(torch.log(torch.full((out_dim,), 0.01)))
+        self.network = nn.Sequential(*layers)              # checkpoint: network.X.*
+        self.log_Dx         = nn.Parameter(torch.full((out_dim,), -2.0))
+        self.log_Dy         = nn.Parameter(torch.full((out_dim,), -2.0))
+        self.log_lambda_dep = nn.Parameter(torch.log(torch.full((out_dim,), 0.01)))  # checkpoint key
     def forward(self, x):
-        return self.net(self.embed(x))
+        return self.network(self.fourier(x))
 
 class SatCorrectionNet(nn.Module):
     # Input: [x, y, t, sat_value]  -> correction for all 4 pollutants
