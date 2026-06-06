@@ -153,6 +153,11 @@ def load_split_with_modis(split_name, modis_df, modis_mean, modis_std):
     y = torch.tensor(df[TARGET_COLS].values, dtype=torch.float32)
     return X, y
 
+# Debug: print all columns in train split
+_df_debug = pd.read_parquet(SPLITS_DIR / "train.parquet")
+print("ALL COLUMNS:", sorted(_df_debug.columns.tolist()))
+del _df_debug
+
 print("Loading MODIS CSV...")
 modis_df  = pd.read_csv(MODIS_CSV)
 modis_mean = float(modis_df["aod_047"].mean())
