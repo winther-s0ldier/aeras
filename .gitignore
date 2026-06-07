@@ -9,6 +9,8 @@ checkpoints/
 *.pt
 *.pth
 *.ckpt
+# Key checkpoints committed explicitly
+!checkpoints/aeras_v19_da4_final.pt
 
 __pycache__/
 *.pyc
