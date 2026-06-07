@@ -162,6 +162,22 @@ for name, X in [("train",X_tr),("val",X_va),("diwali",X_di),("winter",X_wi),("ra
 X_tr, y_tr = X_tr.to(DEVICE), y_tr.to(DEVICE)
 X_va, y_va = X_va.to(DEVICE), y_va.to(DEVICE)
 
+# ── NaN guards ──────────────────────────────────────────────────────────────
+# Inputs: replace any NaN/Inf with 0 (shouldn't happen but belt-and-braces)
+X_tr = torch.nan_to_num(X_tr, nan=0.0, posinf=0.0, neginf=0.0)
+X_va = torch.nan_to_num(X_va, nan=0.0, posinf=0.0, neginf=0.0)
+# Targets: CPCB has real missing readings -> masked loss required
+nan_tr = torch.isnan(y_tr).sum().item()
+nan_va = torch.isnan(y_va).sum().item()
+print(f"NaN in y_tr: {nan_tr:,}  y_va: {nan_va:,}  (masked loss will skip these)")
+
+def masked_mse(pred, target):
+    """MSELoss that ignores NaN targets (missing CPCB readings)."""
+    mask = ~torch.isnan(target)
+    if not mask.any():
+        return pred.sum() * 0.0
+    return ((pred[mask] - target[mask]) ** 2).mean()
+
 # ── Build model ─────────────────────────────────────────────────────────────
 print(f"\nBuilding DualSatPINN from v19: {V19_CKPT}")
 model = DualSatPINN(V19_CKPT).to(DEVICE)
@@ -173,7 +189,6 @@ print(f"Trainable: {trainable:,} / {total:,} params")
 optimizer = torch.optim.Adam(
     [p for p in model.parameters() if p.requires_grad], lr=1e-3)
 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5000, T_mult=1, eta_min=1e-5)
-loss_fn   = nn.MSELoss()
 
 EPOCHS      = 20000
 PRINT_EVERY = 2000
@@ -184,7 +199,7 @@ print(f"\nAdam training ({EPOCHS} epochs)...")
 for epoch in range(1, EPOCHS+1):
     model.train()
     pred = model(X_tr)
-    loss = loss_fn(pred, y_tr)
+    loss = masked_mse(pred, y_tr)
     optimizer.zero_grad()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -194,7 +209,7 @@ for epoch in range(1, EPOCHS+1):
     if epoch % PRINT_EVERY == 0:
         model.eval()
         with torch.no_grad():
-            vl = loss_fn(model(X_va), y_va).item()
+            vl = masked_mse(model(X_va), y_va).item()
         if vl < best_val:
             best_val = vl
             torch.save({"model": model.state_dict(), "epoch": epoch,
@@ -210,13 +225,13 @@ lbfgs = torch.optim.LBFGS(
 for i in range(50):
     def closure():
         lbfgs.zero_grad()
-        l = loss_fn(model(X_tr), y_tr)
+        l = masked_mse(model(X_tr), y_tr)
         l.backward()
         return l
     lbfgs.step(closure)
     if (i+1) % 10 == 0:
         with torch.no_grad():
-            vl = loss_fn(model(X_va), y_va).item()
+            vl = masked_mse(model(X_va), y_va).item()
         print(f"  step {(i+1)*20:>4} | val={vl:.5f}")
 
 # Final save
